@@ -75,6 +75,7 @@ class GEM(nn.Module):
         self.n_memory = args.n_memory
         self.margin = args.memory_strength
         self.cuda = args.cuda
+        self.output_size = self.model.output_size
 
 
         # allocate episodic memory
@@ -99,12 +100,12 @@ class GEM(nn.Module):
         else:
             self.nc_per_task = self.model.hidden_sizes[-1]
 
-    def forward(self, x, t):
-        y = self.model(x, t)
+    def forward(self, x):
+        y = self.model(x)
         return y
 
 
-    def train_step(self, inputs, labels, t):
+    def train_step(self, inputs, labels, get_class_offset, t):
         if t != self.old_task:
             self.observed_tasks.append(t)
             self.old_task = t
@@ -131,16 +132,19 @@ class GEM(nn.Module):
                 # fwd/bwd on the examples in the memory
                 past_task = self.observed_tasks[tt]
 
-                ptlogits = self.forward(self.memory_inputs[past_task], past_task)
+                ptlogits = self.forward(self.memory_inputs[past_task])
 
-                ptloss = self.model.loss_fn(self.model.compute_output_offset(ptlogits, self.memory_labels[past_task], past_task))
+                pt_class_offset = get_class_offset(past_task)
+
+                ptloss = self.model.loss_fn(*self.model.compute_output_offset(ptlogits, self.memory_labels[past_task], *pt_class_offset))
                 ptloss.backward()
                 store_grad(self.parameters, self.grads, self.grad_dims, past_task)
 
         # now compute the grad on the current minibatch
         self.zero_grad()
-        logits = self.forward(inputs, t)
-        logits, labels = self.model.compute_output_offset(logits, labels, t)
+        logits = self.forward(inputs)
+        class_offset = get_class_offset(t)
+        logits, labels = self.model.compute_output_offset(logits, labels, *class_offset)
         loss = self.model.loss_fn(logits, labels)
         loss.backward()
 

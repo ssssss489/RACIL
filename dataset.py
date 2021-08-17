@@ -14,13 +14,13 @@ from collections import OrderedDict
 
 class task_data_loader:
     def __init__(self, task_datasets, args):
-        self.task_datasets = task_datasets
+        self.task_datasets = task_datasets[:args.n_task]
         self.learning_rate = args.lr
         self.batch_size = args.batch_size
         self.task_n_sample = []
         self.task_permutations = list(range(args.n_task))
         self.n_epoch = args.n_epoch
-
+        self.n_task = args.n_task
         sample_permutations = []
 
         for t in range(args.n_task):
@@ -53,8 +53,27 @@ class task_data_loader:
     def __iter__(self):
         return self
 
+    def get_batch(self, t_idx, epoch):
+        task_p = self.sample_permutations[t_idx]
+        for start in range(epoch * self.task_n_sample[t_idx], (epoch + 1) * self.task_n_sample[t_idx], self.batch_size):
+            s_idx = task_p[start: start + self.batch_size]
+            inputs = self.task_datasets[t_idx].train_images[s_idx]
+            labels = self.task_datasets[t_idx].train_labels[s_idx]
+            yield inputs, labels
+
+
+    def get_inputs_with_labels(self, t_idx, tar_labels):
+        inputs = self.task_datasets[t_idx].train_images
+        labels = self.task_datasets[t_idx].train_labels
+        s_idx = []
+        for t in tar_labels:
+            s_idx.append(np.random.choice(torch.arange(labels.shape[0])[labels == t]))
+
+        return inputs.index_select(0, torch.IntTensor(s_idx)).cuda()
+
+
     def __next__(self):
-        if self.c_task == len(self.task_datasets):
+        if self.c_task == self.n_task:
             raise StopIteration
         else:
             task_p = self.sample_permutations[self.c_task]
@@ -247,21 +266,21 @@ if __name__ == "__main__":
     parser.add_argument('--n_task', default=10, type=int, help='number of tasks')
     parser.add_argument('--min_rot', default=0.,
                         type=float, help='minimum rotation')
-    parser.add_argument('--max_rot', default=180.,
+    parser.add_argument('--max_rot', default=270.,
                         type=float, help='maximum rotation')
-    parser.add_argument('--seed', default=0, type=int, help='random seed')
+    parser.add_argument('--seed', default=3, type=int, help='random seed')
     args = parser.parse_args()
     torch.manual_seed(args.seed)
 
     mkdir(args.path)
 
-    # create_mnist_rotation(os.path.join(args.path, 'mnist_rot_{n_task}.pt'.format(n_task=args.n_task)),
-    #                       args.min_rot, args.max_rot, args.n_task)
+    create_mnist_rotation(os.path.join(args.path, 'mnist_rot_{n_task}.pt'.format(n_task=args.n_task)),
+                          args.min_rot, args.max_rot, args.n_task)
 
     # create_mnist_permutation(os.path.join(args.path, 'mnist_perm_{n_task}.pt'.format(n_task=args.n_task)), args.n_task)
 
 
-    create_cifar100_split(os.path.join(args.path, 'cifar100_{n_task}.pt'.format(n_task=args.n_task)), args.n_task)
+    # create_cifar100_split(os.path.join(args.path, 'cifar100_{n_task}.pt'.format(n_task=args.n_task)), args.n_task)
 
     # create_tinyimageNet_split(os.path.join(args.path, 'tinyimageNet_{n_task}.pt'.format(n_task=args.n_task)), args.n_task)
 

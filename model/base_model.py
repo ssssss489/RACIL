@@ -3,28 +3,59 @@ import torch
 import torch.nn as nn
 from torch.nn.functional import relu, avg_pool2d
 from easydict import EasyDict
+from utils import *
 
 models_setting = {
     'mnist': EasyDict(
-        hidden_sizes=[28 * 28, 100, 100, 10],
-        input_size=[28, 28],
-        output_size=10
+        feature_extractor=[28 * 28, 128, 128],
+        classifier=[128, 10],
+        # hidden_sizes=[28 * 28, 512, 10],
+        # input_dims=[28, 28],
+        # n_classes=10
     ),
     'cifar100': EasyDict(
-        hidden_sizes=[3 * 32 * 32, 100, 100, 100],
+        hidden_sizes=[3 * 32 * 32, 512, 512, 100],
         input_size=[3, 32, 32],
-        output_size=100,
+        n_classes=100,
         pool_size= 4
     ),
     'tinyimageNet': EasyDict(
         hidden_sizes=[3 * 64 * 64, 200, 200, 200],
         input_size=[3, 64, 64],
-        output_size=200,
+        n_classes=200,
         pool_size = 8
     ),
 
 
 }
+
+class MLP_Feature_Extractor(nn.Module):
+    def __init__(self, hidden_sizes):
+        super(MLP_Feature_Extractor, self).__init__()
+        layers = [nn.Flatten()]
+        for i in range(len(hidden_sizes) - 1):
+            layers.append(nn.Linear(hidden_sizes[i], hidden_sizes[i+1]))
+            if i < len(hidden_sizes) - 2:
+                layers.append(nn.ReLU())
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class MLP_Classifier(nn.Module):
+    def __init__(self, hidden_sizes):
+        super(MLP_Classifier, self).__init__()
+        layers = [nn.ReLU()]
+        self.hidden_sizes = hidden_sizes
+        for i in range(len(hidden_sizes) - 1):
+            layers.append(nn.Linear(hidden_sizes[i], hidden_sizes[i+1]))
+            if i < len(hidden_sizes) - 2:
+                layers.append(nn.ReLU())
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.net(x)
 
 
 
@@ -33,45 +64,45 @@ class MLP(nn.Module):
         super(MLP, self).__init__()
         self.data = data
         self.n_task = args.n_task
-        layers = [nn.Flatten()]
-        self.hidden_sizes = models_setting[data].hidden_sizes
-        self.output_size = models_setting[data].output_size
-        for i in range(len(self.hidden_sizes) - 1):
-            layers.append(nn.Linear(self.hidden_sizes[i], self.hidden_sizes[i+1]))
-            if i < len(self.hidden_sizes) - 2:
-                layers.append(nn.ReLU())
-        self.model = nn.Sequential(*layers)
+        self.n_classes = models_setting[data].classifier[-1]
+        self.feature_net = MLP_Feature_Extractor(models_setting[data].feature_extractor)
+        self.classifier = MLP_Classifier(models_setting[data].classifier)
         if args.cuda:
-            self.model.cuda()
+            self.cuda()
         self.loss_fn = torch.nn.CrossEntropyLoss()
         self.lr = args.lr
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=args.lr)
-
-        for name, param in self.model.named_parameters():
+        self.optimizer = torch.optim.SGD(self.parameters(), lr=args.lr)
+        for name, param in self.named_parameters():
             print(f"    Layer: {name} | Size: {param.size()} ")
 
-    def compute_output_offset(self, logits, labels, output_offset_start, output_offset_end):
-        if logits is not None:
-            logits = logits[:, output_offset_start: output_offset_end]
-        if labels is not None:
-            labels = labels - output_offset_start
-        return logits, labels
+
 
     def forward(self, x):
-        y = self.model(x)
+        y = self.classifier(self.feature_net(x))
         return y
+
+    def compute_grad(self, inputs, labels, get_class_offset, task_p):
+        self.zero_grad()
+        class_offset = get_class_offset(task_p)
+        logits = self.forward(inputs)
+        logits, labels = compute_output_offset(logits, labels, *class_offset)
+        loss = self.loss_fn(logits, labels)
+        loss.backward()
+        return [p.grad.data.clone() for p in self.parameters()]
+
 
     def train_step(self, inputs, labels, get_class_offset, task_p):
         self.train()
         self.zero_grad()
         class_offset = get_class_offset(task_p)
         logits = self.forward(inputs)
-        logits, labels = self.compute_output_offset(logits, labels, *class_offset)
+        logits, labels = compute_output_offset(logits, labels, *class_offset)
         loss = self.loss_fn(logits, labels)
         acc = torch.eq(torch.argmax(logits, dim=1), labels).float().mean()
         loss.backward()
         self.optimizer.step()
         return float(loss.item()), float(acc.item())
+
 
     def predict(self, inputs, class_offset=None):
         self.eval()
@@ -117,7 +148,7 @@ class ResNet(nn.Module):
     def __init__(self, block, num_blocks, num_classes, nf, data, args):
         super(ResNet, self).__init__()
 
-        self.output_size = num_classes
+        self.n_classes = num_classes
         self.data = data
         self.pool_size = models_setting[self.data].pool_size
         self.in_planes = nf
@@ -158,19 +189,14 @@ class ResNet(nn.Module):
         out = self.linear(out)
         return out
 
-    def compute_output_offset(self, logits, labels, output_offset_start, output_offset_end):
-        if logits is not None:
-            logits = logits[:, output_offset_start: output_offset_end]
-        if labels is not None:
-            labels = labels - output_offset_start
-        return logits, labels
+
 
     def train_step(self, inputs, labels, get_class_offset, task_p=None):
         self.train()
         self.zero_grad()
         class_offset = get_class_offset(task_p)
         logits = self.forward(inputs)
-        logits, labels = self.compute_output_offset(logits, labels, *class_offset)
+        logits, labels = compute_output_offset(logits, labels, *class_offset)
         loss = self.loss_fn(logits, labels)
         acc = torch.eq(torch.argmax(logits, dim=1), labels).float().mean()
         loss.backward()
@@ -189,7 +215,7 @@ class ResNet(nn.Module):
         return predicts
 
 def ResNet18(data, args, nf=20):
-    nclasses = models_setting[data].output_size
+    nclasses = models_setting[data].n_classes
     model = ResNet(BasicBlock, [2, 2, 2, 2], nclasses, nf, data, args)
     return model
 
