@@ -39,14 +39,19 @@ class Buffer(object):
 
 
     def get_buffer_samples(self, list_p_task, size):
-        inputs, labels = [], []
-        for p_task in list_p_task:
+        inputs, labels, pts = [], [], []
+        pt_size = [int(size / len(list_p_task))] * len(list_p_task)
+        pt_size[-1] = size - sum(pt_size[:-1])
+        for p_task, s in zip(list_p_task, pt_size):
             task_memory_inputs = self.memory_inputs[p_task]
             task_memory_labels = self.memory_labels[p_task]
-            idx = torch.from_numpy(np.random.choice(np.arange(self.n_memory), size, replace=False))
+            idx = torch.from_numpy(np.random.choice(np.arange(self.n_memory), s, replace=False))
             inputs.append(task_memory_inputs[idx])
             labels.append(task_memory_labels[idx])
-        return torch.cat(inputs).cuda(), torch.cat(labels).cuda()
+            pts += [p_task] * s
+        if len(set(pts)) == 1:
+            pts = pts[0]
+        return torch.cat(inputs).cuda(), torch.cat(labels).cuda(), pts
 
 class Distill_buffer(Buffer, nn.Module):
     def __init__(self, n_task, n_memory, n_classes):

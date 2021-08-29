@@ -7,10 +7,11 @@ from utils import *
 
 models_setting = {
     'mnist': EasyDict(
-        feature_extractor=[28 * 28, 128, 128],
-        classifier=[128, 10],
+        encoder=[28 * 28, 128, 128],
+        classifier=[128, 128, 10],
+        decoder=[128, 128, 28 * 28],
         # hidden_sizes=[28 * 28, 512, 10],
-        # input_dims=[28, 28],
+        input_dims=[28, 28],
         # n_classes=10
     ),
     'cifar100': EasyDict(
@@ -29,9 +30,9 @@ models_setting = {
 
 }
 
-class MLP_Feature_Extractor(nn.Module):
+class MLP_Encoder(nn.Module):
     def __init__(self, hidden_sizes):
-        super(MLP_Feature_Extractor, self).__init__()
+        super(MLP_Encoder, self).__init__()
         layers = [nn.Flatten()]
         for i in range(len(hidden_sizes) - 1):
             layers.append(nn.Linear(hidden_sizes[i], hidden_sizes[i+1]))
@@ -41,6 +42,62 @@ class MLP_Feature_Extractor(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
+class Feature_Project(nn.Module):
+    def __init__(self, n_center, hidden_size, beta=1, gama=0.8): #16 * 128 *
+        super(Feature_Project, self).__init__()
+        self.n_center = n_center
+        self.center_vectors = None
+        self.samplers = None
+        self.beta = beta
+        self.gama = gama
+        # self.augment_d = torch.autograd.Variable(torch.zeros([100, n_center]).cuda())
+
+    def forward(self, x):
+        d = torch.matmul(x, self.center_vectors.T)
+        mu = torch.matmul(d, self.center_vectors)
+        c = sub_project(x, mu)
+        return c, mu, d
+
+    def pseudo_project(self, shape):
+        if self.samplers is None:
+            self.samplers = []
+            matmul = torch.matmul(self.center_vectors, self.center_vectors.T)
+            for v in matmul:
+                self.samplers.append(torch.distributions.Dirichlet(torch.exp(v * self.beta)))
+        samplers = np.random.choice(self.samplers, size=shape)
+        self.augment_d = torch.stack([s.sample() for s in samplers], dim=0).cuda()
+        mu = torch.matmul(self.augment_d, self.center_vectors)
+        return mu, self.augment_d.detach()
+
+    def init_centers(self, x):
+        if self.center_vectors is None:
+            rand_choice = (torch.rand([self.n_center, x.shape[0]]) > 0.8).to(torch.float).cuda()
+            init_vector = torch.matmul(rand_choice, x)
+            self.center_vectors = torch.autograd.Variable(unit_vector(init_vector))
+            # self.center_vectors = torch.autograd.Variable(unit_vector(torch.randn([self.n_center, x.shape[1]]).cuda()))
+
+
+    def update_centers(self, x, d, y, n_class):
+
+        y_idx = one_hot(y, n_class)
+        y_idx_mean = y_idx / (y.sum(dim=0, keepdim=True) + 1e-8)
+        x_class_mean = torch.matmul(y_idx_mean.T, x)
+        x_sub_mean = x - torch.matmul(y_idx, x_class_mean)
+
+        d_argmax_idx = one_hot(torch.argmax(d, dim=1), self.n_center)
+        d_argmax_idx_mean = d_argmax_idx / (d.sum(dim=0, keepdim=True) + 1e-8)
+        new_vector = torch.matmul(d_argmax_idx_mean.T, x_sub_mean)
+
+        # t = d.T
+        # t_abs = torch.abs(t)
+        # t = torch.where(t_abs == t_abs.max(0, keepdim=True).values, torch.ones_like(t), torch.zeros_like(t)) * t
+        # ts = t / (torch.sum(t.abs(), dim=1, keepdim=True) + 1e-8)
+        # new_vector = torch.matmul(ts, x)
+        self.center_vectors.copy_(unit_vector(self.gama * self.center_vectors + (1-self.gama) * new_vector))
+
+
+
 
 
 class MLP_Classifier(nn.Module):
@@ -57,6 +114,23 @@ class MLP_Classifier(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+class MLP_Decoder(nn.Module):
+
+    def __init__(self, hidden_sizes):
+        super(MLP_Decoder, self).__init__()
+        layers = []
+        self.hidden_sizes = hidden_sizes
+        for i in range(len(hidden_sizes) - 1):
+            layers.append(nn.Linear(hidden_sizes[i], hidden_sizes[i + 1]))
+            if i < len(hidden_sizes) - 2:
+                layers.append(nn.ReLU())
+            else:
+                layers.append(nn.ReLU())
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.net(x)
+        # return (self.net(x) + 1) * 0.5
 
 
 class MLP(nn.Module):
@@ -65,7 +139,7 @@ class MLP(nn.Module):
         self.data = data
         self.n_task = args.n_task
         self.n_classes = models_setting[data].classifier[-1]
-        self.feature_net = MLP_Feature_Extractor(models_setting[data].feature_extractor)
+        self.feature_net = MLP_Encoder(models_setting[data].feature_extractor)
         self.classifier = MLP_Classifier(models_setting[data].classifier)
         if args.cuda:
             self.cuda()

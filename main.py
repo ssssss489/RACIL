@@ -28,7 +28,7 @@ if __name__ == '__main__':
     parser.add_argument('--path', default='dataset/', help='input directory')
     parser.add_argument('--result_path', default='result/', help='input directory')
     parser.add_argument('--dataset', default='mnist_rot_10', help='learn task')
-    parser.add_argument('--n_task', default=3, type=int, help='number of tasks')
+    parser.add_argument('--n_task', default=5, type=int, help='number of tasks')
 
     parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
     parser.add_argument('--n_epoch', default=1, type=int, help='number of epochs')

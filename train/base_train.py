@@ -90,9 +90,17 @@ class base_train:
 
     def get_class_offset(self, t):
         if self.model.data == 'mnist':
-            class_offset = (0, 10)
+            if isinstance(t, list):
+                class_offset = [(0, 10)] * len(t)
+            else:
+                class_offset = (0, 10)
         elif self.model.data == 'cifar100' or self.model.data == 'tinyimageNet':
-            class_offset = self.data_loader.task_datasets[t].classes
+            if isinstance(t, list):
+                class_offset = []
+                for i in t:
+                    class_offset.append(self.data_loader.task_datasets[i].classes)
+            else:
+                class_offset = self.data_loader.task_datasets[t].classes
         return class_offset
 
 
