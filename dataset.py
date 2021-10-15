@@ -11,19 +11,21 @@ from easydict import EasyDict
 import subprocess
 import numpy as np
 from collections import OrderedDict
+import pandas as pd
+from utils import *
 
 class task_data_loader:
     def __init__(self, task_datasets, args):
-        self.task_datasets = task_datasets[:args.n_task]
+        self.task_datasets = task_datasets[:args.n_tasks]
         self.learning_rate = args.lr
         self.batch_size = args.batch_size
         self.task_n_sample = []
-        self.task_permutations = list(range(args.n_task))
-        self.n_epoch = args.n_epoch
-        self.n_task = args.n_task
+        self.task_permutations = list(range(args.n_tasks))
+        self.n_epochs = args.n_epochs
+        self.n_tasks = args.n_tasks
         sample_permutations = []
 
-        for t in range(args.n_task):
+        for t in range(args.n_tasks):
             N = task_datasets[t].train_images.size(0)
             if args.samples_per_task <= 0:
                 n = N
@@ -35,10 +37,10 @@ class task_data_loader:
 
         self.sample_permutations = []
 
-        for t in range(args.n_task):
+        for t in range(args.n_tasks):
             task_t = self.task_permutations[t]
             p = []
-            for _ in range(args.n_epoch):
+            for _ in range(args.n_epochs):
                 task_p = sample_permutations[task_t].numpy()
                 np.random.shuffle(task_p)
                 p.append(torch.LongTensor(task_p))
@@ -53,10 +55,12 @@ class task_data_loader:
     def __iter__(self):
         return self
 
-    def get_batch(self, t_idx, epoch):
+    def get_batch(self, t_idx, epoch, batch_size=None):
+        if batch_size is None:
+            batch_size = self.batch_size
         task_p = self.sample_permutations[t_idx]
-        for start in range(epoch * self.task_n_sample[t_idx], (epoch + 1) * self.task_n_sample[t_idx], self.batch_size):
-            s_idx = task_p[start: start + self.batch_size]
+        for start in range(epoch * self.task_n_sample[t_idx], (epoch + 1) * self.task_n_sample[t_idx], batch_size):
+            s_idx = task_p[start: start + batch_size]
             inputs = self.task_datasets[t_idx].train_images[s_idx]
             labels = self.task_datasets[t_idx].train_labels[s_idx]
             yield inputs, labels
@@ -73,7 +77,7 @@ class task_data_loader:
 
 
     def __next__(self):
-        if self.c_task == self.n_task:
+        if self.c_task == self.n_tasks:
             raise StopIteration
         else:
             task_p = self.sample_permutations[self.c_task]
@@ -159,8 +163,50 @@ def load_tinyimageNet(path):
     torch.save((train, test), os.path.join(path, 'tinyImageNet200.pt'))
     return train, test
 
+def load_miniimageNet(path):
+    logger.info('load miniimageNet dataset')
+    if os.path.exists(os.path.join(path, 'miniImageNet.pt')):
+        return torch.load(os.path.join(path, 'miniImageNet.pt'))
 
-def create_mnist_rotation(file, min_rot, max_rot, n_task):
+
+    # train
+    train_labels = os.path.join(path, 'train.csv')
+    val_labels = os.path.join(path, 'val.csv')
+    test_labels = os.path.join(path, 'test.csv')
+
+    images_path = os.path.join(path, 'images')
+
+    class_labels = {}
+
+    def load_images_labels(data_idx_file):
+        idx = pd.read_csv(data_idx_file)
+        images, labels = [], []
+        for row in idx.itertuples():
+            _, image_file, cls = row
+            if cls not in class_labels:
+                class_labels[cls] = len(class_labels)
+            image = io.read_image(os.path.join(images_path, image_file))
+            image = transforms.CenterCrop(min(image.shape[1], image.shape[2]))(image)
+            image = transforms.functional.resize(image, [84, 84])
+            images.append(image)
+            labels.append(class_labels[cls])
+        images = torch.stack(images)
+        labels = torch.LongTensor(labels)
+        return images, labels
+
+    train_images, train_labels = load_images_labels(train_labels)
+    val_images, val_labels = load_images_labels(val_labels)
+    test_images, test_labels = load_images_labels(test_labels)
+
+    images = torch.cat([train_images, val_images, test_images], dim=0)
+    labels = torch.cat([train_labels, val_labels, test_labels], dim=0)
+
+    torch.save((images, labels), os.path.join(path, 'miniImageNet.pt'))
+    return images, labels
+
+
+
+def create_mnist_rotation(file, min_rot, max_rot, n_tasks):
     logger.info('init mnist rotation dataset in {}.'.format(file))
     m_train, m_test = load_mnist(os.path.join(args.path, 'mnist'))
 
@@ -172,9 +218,9 @@ def create_mnist_rotation(file, min_rot, max_rot, n_task):
         return result.float() / 255.0
 
     task_datasets = []
-    for t in range(n_task):
-        min_r = 1.0 * t / n_task * (max_rot - min_rot) + min_rot
-        max_r = 1.0 * (t + 1) / n_task * (max_rot - min_rot) + min_rot
+    for t in range(n_tasks):
+        min_r = 1.0 * t / n_tasks * (max_rot - min_rot) + min_rot
+        max_r = 1.0 * (t + 1) / n_tasks * (max_rot - min_rot) + min_rot
         rot = random.random() * (max_r - min_r) + min_r
         train_images = rot_images(m_train, rot)
         test_images = rot_images(m_test, rot)
@@ -184,7 +230,7 @@ def create_mnist_rotation(file, min_rot, max_rot, n_task):
 
     torch.save(task_datasets, file)
 
-def create_mnist_permutation(file, n_task):
+def create_mnist_permutation(file, n_tasks):
     logger.info('init mnist permutation dataset in {}.'.format(file))
     m_train, m_test = load_mnist(os.path.join(args.path, 'mnist'))
 
@@ -196,7 +242,7 @@ def create_mnist_permutation(file, n_task):
         return result.float() / 255.0
 
     task_datasets = []
-    for t in range(n_task):
+    for t in range(n_tasks):
         p = torch.randperm(28 * 28).long().view(-1)
         train_images = perm_images(m_train, p)
         test_images = perm_images(m_test, p)
@@ -207,29 +253,36 @@ def create_mnist_permutation(file, n_task):
     torch.save(task_datasets, file)
 
 
-def create_cifar100_split(file, n_task):
+def create_cifar100_split(file, n_tasks):
     logger.info('init cifar100 split dataset in {}.'.format(file))
     m_train, m_test = load_cifar100(os.path.join(args.path, 'cifar100'))
 
+    cls_map = np.arange(100)
+    np.random.shuffle(cls_map)
+
     def select_sample(dataset, c1, c2):
-        idx = (torch.Tensor(dataset.targets) >= c1) & (torch.Tensor(dataset.targets) < c2)
+        map_targets = cls_map[dataset.targets]
+        idx = (torch.BoolTensor(map_targets >= c1)) & (torch.BoolTensor(map_targets < c2))
         images = torch.FloatTensor(dataset.data[idx] / 255.0).permute(0, 3, 1, 2)
-        labels = torch.Tensor(dataset.targets)[idx]
+        labels = torch.LongTensor(dataset.targets)[idx]
         return images, labels
 
-    cpt = int(100 / n_task)
+    cpt = int(100 / n_tasks)
     task_datasets = []
-    for t in range(n_task):
+    for t in range(n_tasks):
         train_images, train_labels = select_sample(m_train, cpt * t, cpt * (t + 1))
         test_images, test_labels = select_sample(m_test, cpt * t, cpt * (t + 1))
         logger.info('split cifar100 task {} over'.format(t))
+        classes = list(set(to_numpy(train_labels)))
+        logger.info(f'classes: {classes}')
         task_datasets.append(EasyDict(train_images=train_images, train_labels=train_labels,
-                                      test_images=test_images, test_labels=test_labels, classes=[cpt * t, cpt * (t + 1)]))
+                                      test_images=test_images, test_labels=test_labels,
+                                      classes=classes))
 
     torch.save(task_datasets, file)
 
-def create_tinyimageNet_split(file, n_task):
-    logger.info('init imageNet100 split dataset in {}.'.format(file))
+def create_tinyimageNet_split(file, n_tasks):
+    logger.info('init miniimageNet split dataset in {}.'.format(file))
     m_train, m_test = load_tinyimageNet(os.path.join(args.path, 'tinyimageNet'))
 
     def select_sample(dataset, c1, c2):
@@ -238,9 +291,9 @@ def create_tinyimageNet_split(file, n_task):
         labels = dataset.labels[idx]
         return images, labels
 
-    cpt = int(200 / n_task)
+    cpt = int(200 / n_tasks)
     task_datasets = []
-    for t in range(n_task):
+    for t in range(n_tasks):
         train_images, train_labels = select_sample(m_train, cpt * t, cpt * (t + 1))
         test_images, test_labels = select_sample(m_test, cpt * t, cpt * (t + 1))
         logger.info('split tinyimageNet task {} over'.format(t))
@@ -249,6 +302,46 @@ def create_tinyimageNet_split(file, n_task):
                                       classes=[cpt * t, cpt * (t + 1)]))
 
     torch.save(task_datasets, file)
+
+
+def creat_miniimageNet_split(file, n_tasks):
+    logger.info('init imageNet100 split dataset in {}.'.format(file))
+    images, labels = load_miniimageNet(os.path.join(args.path, 'miniimageNet'))
+
+    cls_map = np.arange(100)
+    np.random.shuffle(cls_map)
+
+    def split_train_test(images, train_size):
+        idx = np.arange(images.shape[0])
+        np.random.shuffle(idx)
+        return images[idx[:train_size]], images[idx[train_size:]]
+
+    cpt = int(100 / n_tasks)
+    task_datasets = []
+    for t in range(n_tasks):
+        train_images_list, test_images_list = [], []
+        train_labels_list, test_labels_list = [], []
+        classes = []
+        for cls in cls_map[cpt * t: cpt * (t + 1)]:
+            cls_images = images[labels == cls]
+            train_images, test_images = split_train_test(cls_images, 500)
+            train_images_list.append(train_images)
+            test_images_list.append(test_images)
+            train_labels_list.append(torch.LongTensor(train_images.shape[0]).fill_(cls))
+            test_labels_list.append(torch.LongTensor(test_images.shape[0]).fill_(cls))
+            classes.append(cls)
+        train_images = torch.cat(train_images_list, dim=0) / 255.0
+        test_images = torch.cat(test_images_list, dim=0) / 255.0
+        train_labels = torch.cat(train_labels_list, dim=0)
+        test_labels = torch.cat(test_labels_list, dim=0)
+
+        logger.info('split miniimageNet task {} over'.format(t))
+        task_datasets.append(EasyDict(train_images=train_images, train_labels=train_labels,
+                                      test_images=test_images, test_labels=test_labels,
+                                      classes=classes))
+
+    torch.save(task_datasets, file)
+
 
 
 
@@ -263,25 +356,25 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--path', default='dataset/', help='input directory')
-    parser.add_argument('--n_task', default=10, type=int, help='number of tasks')
+    parser.add_argument('--n_tasks', default=10, type=int, help='number of tasks')
     parser.add_argument('--min_rot', default=0.,
                         type=float, help='minimum rotation')
     parser.add_argument('--max_rot', default=270.,
                         type=float, help='maximum rotation')
-    parser.add_argument('--seed', default=3, type=int, help='random seed')
+    parser.add_argument('--seed', default=0, type=int, help='random seed')
     args = parser.parse_args()
     torch.manual_seed(args.seed)
 
     mkdir(args.path)
 
-    create_mnist_rotation(os.path.join(args.path, 'mnist_rot_{n_task}.pt'.format(n_task=args.n_task)),
-                          args.min_rot, args.max_rot, args.n_task)
+    # create_mnist_rotation(os.path.join(args.path, 'mnist_rot_{n_tasks}.pt'.format(n_tasks=args.n_tasks)),
+    #                       args.min_rot, args.max_rot, args.n_tasks)
 
-    # create_mnist_permutation(os.path.join(args.path, 'mnist_perm_{n_task}.pt'.format(n_task=args.n_task)), args.n_task)
-
-
-    # create_cifar100_split(os.path.join(args.path, 'cifar100_{n_task}.pt'.format(n_task=args.n_task)), args.n_task)
-
-    # create_tinyimageNet_split(os.path.join(args.path, 'tinyimageNet_{n_task}.pt'.format(n_task=args.n_task)), args.n_task)
+    # create_mnist_permutation(os.path.join(args.path, 'mnist_perm_{n_tasks}.pt'.format(n_tasks=args.n_tasks)), args.n_tasks)
 
 
+    # create_cifar100_split(os.path.join(args.path, 'cifar100_{n_tasks}_{seed}.pt.pt'.format(n_tasks=args.n_tasks, seed=args.seed)), args.n_tasks)
+
+    # create_tinyimageNet_split(os.path.join(args.path, 'tinyimageNet_{n_tasks}.pt'.format(n_tasks=args.n_tasks)), args.n_tasks)
+
+    # creat_miniimageNet_split(os.path.join(args.path, 'miniimageNet_{n_tasks}_{seed}.pt'.format(n_tasks=args.n_tasks, seed=args.seed)), args.n_tasks)

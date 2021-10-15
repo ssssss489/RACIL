@@ -12,17 +12,47 @@ class base_train:
         self.model = model
         self.data_loader = data_loader
         self.logger = logger
-        self.cuda = args.cuda
         self.batch_size = args.batch_size
         self.metric_results = []
         self.offset_metric_results = []
         self.init_metric_results = None
-        self.n_task = args.n_task
+        self.n_tasks = args.n_tasks
         self.trained_classes = np.zeros(self.model.n_classes).astype(np.bool)
         self.class_offset = None
-        self.n_epoch = args.n_epoch
+        self.n_epochs = args.n_epochs
+        self.total = data_loader.task_n_sample[0]
+        self.task_p =None
+        self.epoch = None
+        self.eval_size = 1024
+
+        self.train_process = [self.train_encoder_classifier] * self.n_epochs
+
+
+    def train_encoder_classifier(self):
+        losses, train_acc = [], []
+        self.logger.info(f'task {self.task_p} is beginning to train.')
+        bar = tqdm(total=self.total, desc=f'task {self.task_p} epoch {self.epoch}')
+        for i, (batch_inputs, batch_labels) in enumerate(self.data_loader.get_batch(self.task_p, epoch=self.epoch)):
+            batch_inputs = batch_inputs.cuda()
+            batch_labels = batch_labels.to(torch.int64).cuda()
+            loss, acc = self.model.train_step(batch_inputs, batch_labels, self.get_class_offset, self.task_p)
+            losses.append(loss)
+            train_acc.append(acc)
+            bar.update(batch_labels.size(0))
+        bar.close()
+        print(f'    loss = {np.mean(losses)}, train_acc = {np.mean(train_acc)}')
+        self.metric(self.task_p)
 
     def train(self):
+        self.metric(-1)
+        for self.task_p in range(self.data_loader.n_tasks):
+            self.class_offset = self.get_class_offset(self.task_p)
+            self.trained_classes[self.class_offset[0]:self.class_offset[1]] = True
+            for self.epoch, func in enumerate(self.train_process):
+                func()
+            self.logger.info(f'task {self.task_p} decoder has learned over')
+
+    def deprecated_train(self):
         last_task_p = -1
         last_epoch = -1
         bar = None
@@ -39,7 +69,7 @@ class base_train:
                 if epoch != 0:
                     self.metric(last_task_p)
                     # if last_task_p != -1 and isinstance(self.model, Dual_parm):
-                    #     if epoch == self.n_epoch - 1 and epoch > 0:
+                    #     if epoch == self.n_epochs - 1 and epoch > 0:
                     #         self.model.task_parameters.append(deepcopy(dict(self.model.state_dict())))
                     #         self.model.over_train = True
                     #         print('    store_parameters')
@@ -56,17 +86,9 @@ class base_train:
                     #     print('    reload_parameters')
                     #     self.model.over_train = False
 
-
-
-
                 bar = tqdm(total=total, desc=f'task {task_p} epoch {epoch}')
                 losses, train_acc = [], []
                 last_epoch = epoch
-
-
-
-
-
             ## train step
             if self.cuda:
                 batch_inputs = batch_inputs.cuda()
@@ -89,12 +111,12 @@ class base_train:
 
 
     def get_class_offset(self, t):
-        if self.model.data == 'mnist':
+        if self.model.data_name == 'mnist':
             if isinstance(t, list):
                 class_offset = [(0, 10)] * len(t)
             else:
                 class_offset = (0, 10)
-        elif self.model.data == 'cifar100' or self.model.data == 'tinyimageNet':
+        elif self.model.data_name == 'cifar100' or self.model.data_name == 'tinyimageNet' or self.model.data_name == 'miniiamgeNet':
             if isinstance(t, list):
                 class_offset = []
                 for i in t:
@@ -106,7 +128,7 @@ class base_train:
 
 
     def metric(self, task_p=None):
-        eval_size = 1024
+        eval_size = self.eval_size
         task_accuracy = []
         offset_task_accuracy = []
         if task_p == -1:
@@ -124,8 +146,7 @@ class base_train:
                 else:
                     end = test_size
                 inputs = dataset.test_images[start: end]
-                if self.cuda:
-                    inputs = inputs.cuda()
+                inputs = inputs.cuda()
                 offset_predicts[start: end] = self.model.predict(inputs, self.get_class_offset(i))
                 predicts[start: end] = self.model.predict(inputs, (0, n_classes))
                 start = end
