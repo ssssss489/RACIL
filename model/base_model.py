@@ -21,10 +21,17 @@ parameters = {
         input_dims=[3, 32, 32],
         nf=20,
         classifier=[20 * 8, 100],
-        task_discriminater=[20 * 8, 128,  10],
         hidden_size=160,
         n_classes=100,
         pool_size=4,
+    ),
+    'miniimageNet64': EasyDict(
+        input_dims=[3, 64, 64],
+        nf=20,
+        classifier=[20 * 8, 100],
+        hidden_size=160,
+        n_classes=100,
+        pool_size=8,
     ),
     'tinyimageNet': EasyDict(
         input_dims=[3, 64, 64],
@@ -49,26 +56,31 @@ class base_model(nn.Module):
         for name, param in self.named_parameters():
             print(f"    Layer: {name} | Size: {param.size()} ")
 
+    def forward(self, x):
+        pass
 
-    def train_step(self, inputs, labels, get_class_offset, task_p):
+    def encoder_feature(self, x):
+        pass
+
+    def train_step(self, inputs, labels, class_offset, task_p):
         self.train()
         self.zero_grad()
-        class_offset = get_class_offset(task_p)
         logits = self.forward(inputs)
-        logits, labels = compute_output_offset(logits, labels, class_offset)
         loss = self.classifier_loss_fn(logits, labels)
         acc = torch.eq(torch.argmax(logits, dim=1), labels).float().mean()
         loss.backward()
         self.optimizer.step()
-        return float(loss.item()), float(acc.item())
+        return {'loss': float(loss.item()), 'acc': float(acc.item())}, \
+               {'loss': 0, 'acc': 0}
 
     def predict(self, inputs, class_offset=None):
         self.eval()
         self.zero_grad()
         logits = self.forward(inputs)
-        if class_offset:
-            logits = logits[:, class_offset[0]: class_offset[1]]
-            predicts = torch.argmax(logits, dim=1) + class_offset[0]
+        if class_offset is not None:
+            offset = torch.zeros_like(logits).cuda().fill_(-1e10)
+            offset[:, class_offset] = 0
+            predicts = torch.argmax(logits + offset, dim=1)
         else:
             predicts = torch.argmax(logits, dim=1)
         return predicts
@@ -143,11 +155,9 @@ def conv3x3(in_planes, out_planes, stride=1):
 
 class BasicBlockEnc(nn.Module):
     expansion = 1
-    def __init__(self, in_planes, planes, stride=1):
+    def __init__(self, in_planes, planes, stride=1, bn_func=torchBatchNorm2d):
         super(BasicBlockEnc, self).__init__()
-        bn_func = noiseBatchNorm2d
-        # bn_func = nn.BatchNorm2d
-        # bn_func = nn.InstanceNorm2d
+
         self.conv1 = conv3x3(in_planes, planes, stride)
         self.bn1 = bn_func(planes)
         self.conv2 = conv3x3(planes, planes)
@@ -193,12 +203,10 @@ class ResizeConv2d(nn.Module):
 
 class BasicBlockDec(nn.Module):
 
-    def __init__(self, in_planes, stride=1):
+    def __init__(self, in_planes, stride=1, bn_func=nn.BatchNorm2d):
         super(BasicBlockDec, self).__init__()
 
         planes = int(in_planes / stride)
-        bn_func = nn.BatchNorm2d
-        # bn_func = nn.InstanceNorm2d
         self.conv2 = nn.Conv2d(in_planes, in_planes, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn2 = bn_func(in_planes)
 
@@ -224,28 +232,33 @@ class BasicBlockDec(nn.Module):
 
 
 class ResNet18_Encoder(nn.Module):
-    def __init__(self, input_dims, nf, pool_size, num_blocks=[2, 2, 2, 2]):
+    def __init__(self, input_dims, nf, pool_size, output_dim,  num_blocks=[2, 2, 2, 2],  bn_type='bn'):
         super(ResNet18_Encoder, self).__init__()
         self.input_dims = input_dims
         self.pool_size = pool_size
         self.in_planes = nf
         self.conv1 = conv3x3(3, nf * 1)
-        bn_func = noiseBatchNorm2d
-        # bn_func = nn.BatchNorm2d
-        # bn_func = nn.InstanceNorm2d
-        self.bn1 = bn_func(nf * 1)
+        if bn_type == 'bn':
+            self.bn_func = torchBatchNorm2d
+        elif bn_type == 'nbn':
+            self.bn_func = noiseBatchNorm2d
+        elif bn_type == 'vbn':
+            self.bn_func = vatBatchNorm2d
+        else:
+            self.bn_func = nn.BatchNorm2d
+        self.bn1 = self.bn_func(nf * 1)
         self.layer1 = self._make_layer(1, BasicBlockEnc, nf * 1, num_blocks[0], stride=1)
         self.layer2 = self._make_layer(2, BasicBlockEnc, nf * 2, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(3, BasicBlockEnc, nf * 4, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(4, BasicBlockEnc, nf * 8, num_blocks[3], stride=2)
-        self.linear1 = nn.Linear(nf * 8 * self.pool_size * self.pool_size, 160)
-
+        self.linear1 = nn.Linear(nf * 8 * self.pool_size * self.pool_size, output_dim)
+        self.pooling = nn.AvgPool2d(self.pool_size)
 
     def _make_layer(self, l, block, planes, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks - 1)
         layers = []
         for i, stride in enumerate(strides):
-            bk = block(self.in_planes, planes, stride).cuda()
+            bk = block(self.in_planes, planes, stride, self.bn_func).cuda()
             self.add_module('layer_{}_{}'.format(l, i), bk)
             layers.append(bk)
             self.in_planes = planes * block.expansion
@@ -263,7 +276,8 @@ class ResNet18_Encoder(nn.Module):
         out3 = self.layer2(out2, t) # 40 16 16
         out4 = self.layer3(out3, t) # 80 8 8
         out5 = self.layer4(out4, t) # 160 4 4
-        out6 = self.linear1(out5.view(bsz, -1)) # 160
+        out6 = self.linear1(out5.view(bsz, -1)) # 160   # UCIR prefer linear not pooling
+        # out6 = self.pooling(out5).view(bsz, -1)  # pooling unstable
         if with_hidden:
             return out6, [x, out1, out2, out3, out4, out5, out6]
         else:
@@ -286,13 +300,14 @@ class ResNet18_Decoder(nn.Module):
         super(ResNet18_Decoder, self).__init__()
         self.outputs_dims = output_dims
         self.pool_size = pool_size
-        self.linear = nn.Linear(z_dim, z_dim * pool_size * pool_size)
+        # self.linear = nn.Linear(z_dim, z_dim * pool_size * pool_size)
+        self.linear = lambda x: x.view(x.shape[0], x.shape[1], 1, 1).repeat(1,1,pool_size,pool_size).view(x.shape[0], -1)
         self.in_planes = z_dim
         self.layer4 = self._make_layer(BasicBlockDec, nf * 4, num_Blocks[3], stride=2)
         self.layer3 = self._make_layer(BasicBlockDec, nf * 2, num_Blocks[2], stride=2)
         self.layer2 = self._make_layer(BasicBlockDec, nf * 1, num_Blocks[1], stride=2)
         self.layer1 = self._make_layer(BasicBlockDec, nf * 1, num_Blocks[0], stride=1)
-        self.conv1 = ResizeConv2d(nf, self.outputs_dims[0], kernel_size=3, scale_factor=int(self.outputs_dims[-1]/32))
+        self.conv1 = ResizeConv2d(nf, self.outputs_dims[0], kernel_size=3, scale_factor=int(self.outputs_dims[-1]/self.outputs_dims[-1]))
         pass
         # self.conv1 = nn.Conv2d(64, self.outputs_dims[0], kernel_size=3, stride=int(self.outputs_dims[-1]/32))
 
@@ -314,6 +329,8 @@ class ResNet18_Decoder(nn.Module):
         out2 = self.layer2(out3) # 20, 32, 32
         out1 = self.layer1(out2) # 20, 32, 32
         x = torch.sigmoid(self.conv1(out1))# * 0.5 + 0.5 # 3, 32, 32
+        offset = x.shape[-1] - self.outputs_dims[-1]
+        x = x[:,:,offset:offset+self.outputs_dims[-2], offset:offset+self.outputs_dims[-1]]
         x = x.view(x.size(0), *self.outputs_dims)
         return x, [x, out1, out2, out3, out4, out5]
 
@@ -350,22 +367,33 @@ class ndpm_Deocder(nn.Module):
         return torch.sigmoid(x_logit)
 
 
-
-
 class ResNet18(base_model):
     def __init__(self, args):
         super(ResNet18, self).__init__(args)
         self.encoder = ResNet18_Encoder(parameters[self.data_name].input_dims,
                                         parameters[self.data_name].nf,
-                                        parameters[self.data_name].pool_size)
+                                        parameters[self.data_name].pool_size,
+                                        parameters[self.data_name].classifier[0],
+                                        bn_type=args.bn_type)
         self.classifier = MLP_Classifier(parameters[self.data_name].classifier, [])
         self.optimizer = torch.optim.SGD(self.parameters(), lr=args.lr)
+        self.bn_type = args.bn_type
         self.show_all_parameters()
         self.cuda()
 
-    def forward(self, x):
-        y = self.classifier(self.encoder(x))
-        return y
+    def forward(self, x, t=None, with_hidden=False):
+        x, en_features = self.encoder(x, t, with_hidden=True)
+        y = self.classifier(x)
+        if with_hidden:
+            return y, en_features
+        else:
+            return y
+
+    def encoder_feature(self, inputs):
+        self.eval()
+        self.zero_grad()
+        features = self.encoder(inputs)
+        return features
 
 
 

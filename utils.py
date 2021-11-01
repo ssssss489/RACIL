@@ -54,6 +54,8 @@ def normalize(var):
     return var
     #  11.2694
 
+
+
 def min_max_normalize(var):
     min = var.min(-1, keepdim=True)[0]
     max = var.max(-1, keepdim=True)[0]
@@ -113,3 +115,10 @@ def draw_tSNE(feature, mu, k_assign):
     # plt.colorbar()
     plt.show()
     return
+
+def mask(inputs, class_offset, type='add'):
+    if type=='add':
+        offset = torch.zeros_like(inputs).cuda().fill_(-1e10)
+        offset[:, class_offset] = 0
+        outputs = inputs + offset
+    return outputs

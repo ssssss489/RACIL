@@ -1,87 +1,77 @@
 
 
 from model.base_model import *
+from model.regularization import decoder_regularization
 
-class EWC(nn.Module):
-    def __init__(self, model, data, args):
-        super(EWC, self).__init__()
-        self.data = data
-        self.n_task = args.n_task
-        self.n_memory = args.n_memory
-        self.reg = args.memory_strength
-        self.model = model(data, args)
-        self.output_size = self.model.output_size
-
-        self.fisher = {}
-        self.current_task = 0
-        self.optpar = {}
-        self.memx = None
-        self.memy = None
+class EWC(ResNet18):
+    def __init__(self, args):
+        super(EWC, self).__init__(args)
+        self.running_fisher = self.init_fisher()
+        self.normalized_fisher = self.init_fisher()
+        self.tmp_fisher = self.init_fisher()
+        self.prev_params = {}
+        self.lambda_ = args.ewc_lambda
+        self.alpha_ = args.ewc_alpha
+        self.running_fisher_after = args.running_fisher_after
+        self.running_idx = 1
+        self.weights = {n: p for n, p in self.named_parameters() if p.requires_grad}
 
 
 
+    def init_fisher(self):
+        return {n: p.clone().detach().fill_(0) for n, p in self.named_parameters() if p.requires_grad}
 
+    def accum_fisher(self):
+        for n, p in self.tmp_fisher.items():
+            p += self.weights[n].grad ** 2
 
-    def forward(self, x):
-        return self.model(x)
+    def update_running_fisher(self):
+        for n, p in self.running_fisher.items():
+            self.running_fisher[n] = (1. - self.alpha_) * p \
+                                     + 1. / self.running_fisher_after * self.alpha_ * self.tmp_fisher[n]
+            # reset the accumulated fisher
+        self.tmp_fisher = self.init_fisher()
 
-    def predict(self, inputs, class_offset=None):
-        return self.model.predict(inputs, class_offset)
+    def fisher_loss(self):
+        reg_loss = 0
+        if len(self.prev_params) > 0:
+            # add regularization loss
+            for n, p in self.weights.items():
+                reg_loss += (self.normalized_fisher[n] * (p - self.prev_params[n]) ** 2).sum()
+                # reg_loss += (1 * (p - self.prev_params[n]) ** 2).sum()
+        return reg_loss
 
-    def compute_output_offset(self, logits, labels, output_offset_start, output_offset_end):
-        if logits is not None:
-            logits = logits[:, output_offset_start: output_offset_end]
-        if labels is not None:
-            labels = labels - output_offset_start
-        return logits, labels
-
-    def train_step(self, inputs, labels, get_class_offset, task_p):
-        self.model.train()
-        if task_p != self.current_task:
-            self.model.zero_grad()
-            old_class_offset = get_class_offset(self.current_task)
-            mem_logits = self.model.forward(self.memx)
-            mem_logits, mem_labels = self.compute_output_offset(mem_logits, self.memy, *old_class_offset)
-            self.model.loss_fn(mem_logits, mem_labels).backward()
-            self.fisher[self.current_task] = []
-            self.optpar[self.current_task] = []
-            for p in self.model.parameters():
-                pd = p.data.clone()
-                pg = p.grad.data.clone().pow(2)
-                self.optpar[self.current_task].append(pd)
-                self.fisher[self.current_task].append(pg)
-            self.current_task = task_p
-            self.memx = None
-            self.memy = None
-
-        if self.memx is None:
-            self.memx = inputs.data.clone()
-            self.memy = labels.data.clone()
-        else:
-            if self.memx.size(0) < self.n_memory:
-                self.memx = torch.cat((self.memx, inputs.data.clone()))
-                self.memy = torch.cat((self.memy, labels.data.clone()))
-                if self.memx.size(0) > self.n_memory:
-                    self.memx = self.memx[:self.n_memory]
-                    self.memy = self.memy[:self.n_memory]
-
+    def train_step(self, inputs, labels, class_offset, task_p):
+        self.train()
         self.zero_grad()
-        class_offset = get_class_offset(task_p)
-        logits = self.forward(inputs)
-        logits, labels = self.compute_output_offset(logits, labels, *class_offset)
-        loss = self.model.loss_fn(logits, labels)
-        for tt in range(task_p):
-            for i, p in enumerate(self.model.parameters()):
-                l = self.reg * self.fisher[tt][i]
-                l = l * (p - self.optpar[tt][i]).pow(2)
-                loss += l.sum()
+        loss = 0
+        if task_p not in self.observed_tasks:
+            self.observed_tasks.append(task_p)
+            if task_p > 0:
+                self.prev_params = deepcopy(self.weights)
+                max_fisher = max([torch.max(m) for m in self.running_fisher.values()])
+                min_fisher = min([torch.min(m) for m in self.running_fisher.values()])
+                for n, p in self.running_fisher.items():
+                    self.normalized_fisher[n] = (p - min_fisher) / (max_fisher - min_fisher + 1e-32)
+
+        if self.running_idx % self.running_fisher_after == 0:
+            self.update_running_fisher()
+        self.running_idx += 1
+
+        tasks = torch.zeros_like(labels).fill_(task_p).cuda()
+        logits, en_features = self.forward(inputs, tasks, with_hidden=True)
+
+        classifier_loss = self.classifier_loss_fn(logits, labels)
+        fisher_loss = self.fisher_loss()
+        loss += classifier_loss + self.lambda_ * fisher_loss
+
+        acc = torch.eq(torch.argmax(logits, dim=1), labels).float().mean()
 
         loss.backward()
-        self.model.optimizer.step()
-        acc = torch.eq(torch.argmax(logits, dim=1), labels).float().mean()
-        return float(loss.item()), float(acc.item())
+        self.accum_fisher()
+        self.optimizer.step()
 
 
-
-
+        return {'loss': float(classifier_loss.item()), 'acc': float(acc.item()), 'regular_loss': 0}, \
+               {'loss': 0, 'acc': 0, 'regular_loss': 0}
 

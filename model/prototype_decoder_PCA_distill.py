@@ -1,7 +1,7 @@
 
 from model.base_model import *
 from train.base_train import *
-from model.buffer import Buffer
+from memory.base_buffer import Buffer
 from scipy.special import comb
 from itertools import combinations, product
 from scipy import stats
@@ -41,8 +41,8 @@ def retrieve(buffer, n_retrieve, excl_indices=None, base_class_n_sample=500):
     x = buffer.memory_inputs[indices]
     y = buffer.memory_labels[indices]
     t = buffer.memory_tasks[indices]
-    weights = [(base_class_n_sample + 0.0) / buffer.class_n_samples[l] for l in to_numpy(y)]
-    return x.cuda(), y.cuda().long(), torch.Tensor(weights).cuda(), t.cuda().long()
+    # weights = [(base_class_n_sample + 0.0) / buffer.class_n_samples[l] for l in to_numpy(y)]
+    return x.cuda(), y.cuda().long(), 0, t.cuda().long()
 
 
 class cluster:
@@ -141,6 +141,7 @@ class Prototype(torch.nn.Module):
 
         class_inputs = {}
         class_task_map = {}
+        cls_idx = {i: cls for i, cls in enumerate(memory_classes)}
 
         for b_cls in buffer_classes:
             class_inputs[b_cls] = buffer.memory_inputs[buffer.memory_labels == b_cls]
@@ -149,18 +150,20 @@ class Prototype(torch.nn.Module):
             class_inputs[t_cls] = inputs[labels == t_cls]
             class_task_map[t_cls] = task_p
 
-        class_size = np.zeros(len(class_inputs), dtype=np.int)
+        class_size = defaultdict(lambda: 0) #np.zeros(len(class_inputs), dtype=np.int)
         left_memories = buffer.n_memories
-        for cls in np.argsort(class_prorate)[::-1]:
-            class_size[cls] = min(int(np.ceil(left_memories * class_prorate[cls])), len(class_inputs[cls]))
+
+        for idx in np.argsort(class_prorate)[::-1]:
+            cls = cls_idx[idx]
+            class_size[cls] = min(int(np.ceil(left_memories * class_prorate[idx])), len(class_inputs[cls]))
             left_memories -= class_size[cls]
-            class_prorate[cls] = 0
+            class_prorate[idx] = 0
             class_prorate = class_prorate / (class_prorate.sum() + 1e-7)
 
         new_buffer_inputs, new_buffer_labels, new_buffer_keep_prob, new_buffer_tasks = [], [], [], []
 
         for i, cls in enumerate(class_inputs.keys()):
-            choose_size = class_size[i]
+            choose_size = class_size[cls]
             clusters = self.class_clusters[cls]
             cluster_size = np.array([clu.indices.sum() for clu in clusters])
             cluster_choose_size = np.round((cluster_size + 0.0) / cluster_size.sum() * choose_size).astype(np.int)
@@ -226,11 +229,11 @@ class Prototype(torch.nn.Module):
 
 
 class prototype_decoder(base_model):
-    def __init__(self, args, model_type):
+    def __init__(self, args, model_type='resnet'):
         super(prototype_decoder, self).__init__(args)
         self.decoder_update = args.decoder_update
         self.eps_mem_batch = args.eps_mem_batch
-        self.buffer = Buffer(self.n_tasks, args.n_memories, self.n_classes, parameters[self.data_name].input_dims)
+        self.buffer = Buffer(self.n_tasks, args.n_memories, self.n_classes)
         self.Decoders = []
         self.model_type = model_type
         if model_type == 'mlp':
@@ -242,12 +245,13 @@ class prototype_decoder(base_model):
 
         elif model_type == 'resnet':
             self.encoder = ResNet18_Encoder(parameters[self.data_name].input_dims,
-                                            parameters[self.data_name].nf,
-                                            parameters[self.data_name].pool_size)
+                                        parameters[self.data_name].nf,
+                                        parameters[self.data_name].pool_size,
+                                        parameters[self.data_name].classifier[0],
+                                        bn_type=args.bn_type)
             self.classifier = MLP_Classifier(parameters[self.data_name].classifier, [])
             self.pre_encoder = None
             for _ in range(self.n_tasks):
-
                 self.Decoders.append(ResNet18_Decoder(parameters[self.data_name].pool_size,
                                                       parameters[self.data_name].nf,
                                                       parameters[self.data_name].hidden_size,
@@ -369,7 +373,7 @@ class prototype_decoder(base_model):
         return f3
 
 
-    def train_step(self, inputs, labels, get_class_offset, task_p, classifier_train_flag=True):
+    def train_step(self, inputs, labels, class_offset, task_p, classifier_train_flag=True):
 
         self.train()
         self.zero_grad()
@@ -425,9 +429,10 @@ class prototype_decoder(base_model):
 
             loss += decoder_loss * self.decoder_loss_weight\
                     + pre_decoder_loss * self.decoder_loss_weight\
-                    + fusion_pre_decoder_loss * 10\
-                    + classifier_loss_mean\
-                    # + offset_classifier_loss.mean()
+                    + classifier_loss_mean
+                # + fusion_pre_decoder_loss * 10\
+
+            # + offset_classifier_loss.mean()
 
             pt_acc = torch.eq(torch.argmax(cmb_logits[-pt_sample_size:], dim=1), pt_labels).float().mean()
             acc = torch.eq(torch.argmax(cmb_logits[:-pt_sample_size], dim=1), labels).float().mean()
@@ -495,7 +500,7 @@ class prototype_decoder_train(base_train):
         for i, (batch_inputs, batch_labels) in enumerate(self.data_loader.get_batch(self.task_p, epoch=self.epoch)):
             batch_inputs = batch_inputs.cuda()
             batch_labels = batch_labels.to(torch.int64).cuda()
-            current_info, pt_info = self.model.train_step(batch_inputs, batch_labels, self.get_class_offset,
+            current_info, pt_info = self.model.train_step(batch_inputs, batch_labels, self.current_classes,
                                                                         self.task_p, self.epoch >= self.n_epochs_learn)
             current_infos.append(current_info)
             pt_infos.append(pt_info)
@@ -541,12 +546,3 @@ class prototype_decoder_train(base_train):
 
 
 
-
-    def train(self):
-        self.metric(-1)
-        for self.task_p in range(self.data_loader.n_tasks):
-            self.class_offset = self.get_class_offset(self.task_p)
-            self.trained_classes[self.class_offset[0]:self.class_offset[1]] = True
-            for self.epoch, func in enumerate(self.train_process) :
-                func()
-            self.logger.info(f'task {self.task_p} decoder has learned over')

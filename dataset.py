@@ -21,7 +21,7 @@ class task_data_loader:
         self.batch_size = args.batch_size
         self.task_n_sample = []
         self.task_permutations = list(range(args.n_tasks))
-        self.n_epochs = args.n_epochs
+        self.n_epochs = 20# args.n_epochs
         self.n_tasks = args.n_tasks
         sample_permutations = []
 
@@ -40,7 +40,7 @@ class task_data_loader:
         for t in range(args.n_tasks):
             task_t = self.task_permutations[t]
             p = []
-            for _ in range(args.n_epochs):
+            for _ in range(self.n_epochs):
                 task_p = sample_permutations[task_t].numpy()
                 np.random.shuffle(task_p)
                 p.append(torch.LongTensor(task_p))
@@ -163,10 +163,10 @@ def load_tinyimageNet(path):
     torch.save((train, test), os.path.join(path, 'tinyImageNet200.pt'))
     return train, test
 
-def load_miniimageNet(path):
+def load_miniimageNet(path, dim=64):
     logger.info('load miniimageNet dataset')
-    if os.path.exists(os.path.join(path, 'miniImageNet.pt')):
-        return torch.load(os.path.join(path, 'miniImageNet.pt'))
+    if os.path.exists(os.path.join(path, f'miniImageNet{dim}.pt')):
+        return torch.load(os.path.join(path, f'miniImageNet{dim}.pt'))
 
 
     # train
@@ -187,7 +187,7 @@ def load_miniimageNet(path):
                 class_labels[cls] = len(class_labels)
             image = io.read_image(os.path.join(images_path, image_file))
             image = transforms.CenterCrop(min(image.shape[1], image.shape[2]))(image)
-            image = transforms.functional.resize(image, [84, 84])
+            image = transforms.functional.resize(image, [dim, dim])
             images.append(image)
             labels.append(class_labels[cls])
         images = torch.stack(images)
@@ -201,7 +201,7 @@ def load_miniimageNet(path):
     images = torch.cat([train_images, val_images, test_images], dim=0)
     labels = torch.cat([train_labels, val_labels, test_labels], dim=0)
 
-    torch.save((images, labels), os.path.join(path, 'miniImageNet.pt'))
+    torch.save((images, labels), os.path.join(path, f'miniImageNet{dim}.pt'))
     return images, labels
 
 
@@ -253,7 +253,7 @@ def create_mnist_permutation(file, n_tasks):
     torch.save(task_datasets, file)
 
 
-def create_cifar100_split(file, n_tasks):
+def create_cifar100_split(file, n_tasks, task_class_nums=None):
     logger.info('init cifar100 split dataset in {}.'.format(file))
     m_train, m_test = load_cifar100(os.path.join(args.path, 'cifar100'))
 
@@ -267,11 +267,18 @@ def create_cifar100_split(file, n_tasks):
         labels = torch.LongTensor(dataset.targets)[idx]
         return images, labels
 
-    cpt = int(100 / n_tasks)
+    if task_class_nums:
+        assert len(task_class_nums) == n_tasks
+        cpts = [int(t * (100 / np.sum(task_class_nums))) for t in task_class_nums]
+    else:
+        cpts = [int(100 / n_tasks)] * n_tasks
+
     task_datasets = []
+    u = 0
     for t in range(n_tasks):
-        train_images, train_labels = select_sample(m_train, cpt * t, cpt * (t + 1))
-        test_images, test_labels = select_sample(m_test, cpt * t, cpt * (t + 1))
+        train_images, train_labels = select_sample(m_train, u, u+cpts[t])
+        test_images, test_labels = select_sample(m_test, u, u+cpts[t])
+        u += cpts[t]
         logger.info('split cifar100 task {} over'.format(t))
         classes = list(set(to_numpy(train_labels)))
         logger.info(f'classes: {classes}')
@@ -304,9 +311,9 @@ def create_tinyimageNet_split(file, n_tasks):
     torch.save(task_datasets, file)
 
 
-def creat_miniimageNet_split(file, n_tasks):
+def creat_miniimageNet_split(file, n_tasks, dim=64, task_class_nums=None):
     logger.info('init imageNet100 split dataset in {}.'.format(file))
-    images, labels = load_miniimageNet(os.path.join(args.path, 'miniimageNet'))
+    images, labels = load_miniimageNet(os.path.join(args.path, 'miniimageNet'), dim=dim)
 
     cls_map = np.arange(100)
     np.random.shuffle(cls_map)
@@ -316,13 +323,18 @@ def creat_miniimageNet_split(file, n_tasks):
         np.random.shuffle(idx)
         return images[idx[:train_size]], images[idx[train_size:]]
 
-    cpt = int(100 / n_tasks)
+    if task_class_nums:
+        assert len(task_class_nums) == n_tasks
+        cpts = [int(t * (100 / np.sum(task_class_nums))) for t in task_class_nums]
+    else:
+        cpts = [int(100 / n_tasks)] * n_tasks
     task_datasets = []
+    u = 0
     for t in range(n_tasks):
         train_images_list, test_images_list = [], []
         train_labels_list, test_labels_list = [], []
         classes = []
-        for cls in cls_map[cpt * t: cpt * (t + 1)]:
+        for cls in cls_map[u: u+cpts[t]]:
             cls_images = images[labels == cls]
             train_images, test_images = split_train_test(cls_images, 500)
             train_images_list.append(train_images)
@@ -330,12 +342,13 @@ def creat_miniimageNet_split(file, n_tasks):
             train_labels_list.append(torch.LongTensor(train_images.shape[0]).fill_(cls))
             test_labels_list.append(torch.LongTensor(test_images.shape[0]).fill_(cls))
             classes.append(cls)
+        u += cpts[t]
         train_images = torch.cat(train_images_list, dim=0) / 255.0
         test_images = torch.cat(test_images_list, dim=0) / 255.0
         train_labels = torch.cat(train_labels_list, dim=0)
         test_labels = torch.cat(test_labels_list, dim=0)
 
-        logger.info('split miniimageNet task {} over'.format(t))
+        logger.info('split miniimageNet{} task {} over'.format(dim, t))
         task_datasets.append(EasyDict(train_images=train_images, train_labels=train_labels,
                                       test_images=test_images, test_labels=test_labels,
                                       classes=classes))
@@ -356,7 +369,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--path', default='dataset/', help='input directory')
-    parser.add_argument('--n_tasks', default=10, type=int, help='number of tasks')
+    parser.add_argument('--n_tasks', default=11, type=int, help='number of tasks')
     parser.add_argument('--min_rot', default=0.,
                         type=float, help='minimum rotation')
     parser.add_argument('--max_rot', default=270.,
@@ -377,4 +390,9 @@ if __name__ == "__main__":
 
     # create_tinyimageNet_split(os.path.join(args.path, 'tinyimageNet_{n_tasks}.pt'.format(n_tasks=args.n_tasks)), args.n_tasks)
 
-    # creat_miniimageNet_split(os.path.join(args.path, 'miniimageNet_{n_tasks}_{seed}.pt'.format(n_tasks=args.n_tasks, seed=args.seed)), args.n_tasks)
+    # creat_miniimageNet_split(os.path.join(args.path, 'miniimageNet{dim}_{n_tasks}_{seed}.pt'.format(dim=64, n_tasks=args.n_tasks, seed=args.seed)),
+    #                          args.n_tasks, dim=64)
+
+    task_class_nums = [10] + [1] * 10
+    create_cifar100_split(os.path.join(args.path, 'cifar100_{n_tasks}_{seed}.pt'.format(n_tasks=args.n_tasks, seed=args.seed)),
+                          args.n_tasks, task_class_nums)

@@ -4,8 +4,7 @@ import torch
 from tqdm import tqdm
 import numpy as np
 from easydict import EasyDict
-from copy import deepcopy
-from model.Dual_parm import Dual_parm
+import os
 
 class base_train:
     def __init__(self, data_loader, model, args, logger):
@@ -13,133 +12,77 @@ class base_train:
         self.data_loader = data_loader
         self.logger = logger
         self.batch_size = args.batch_size
-        self.metric_results = []
-        self.offset_metric_results = []
+        self.result_file = os.path.join(args.result_path,
+                                        f'{args.model}_{args.dataset}_{args.n_epochs}_{args.n_memories}_'
+                                        f'{args.bn_type}_{args.regular_type}.pt')
+
         self.init_metric_results = None
         self.n_tasks = args.n_tasks
         self.trained_classes = np.zeros(self.model.n_classes).astype(np.bool)
-        self.class_offset = None
+
         self.n_epochs = args.n_epochs
-        self.total = data_loader.task_n_sample[0]
+        self.n_pretrain_epochs = args.n_pretrain_epochs
+
         self.task_p =None
         self.epoch = None
+        self.current_classes=None
         self.eval_size = 1024
 
+        self.pretrain_process = [self.train_encoder_classifier] * self.n_pretrain_epochs
         self.train_process = [self.train_encoder_classifier] * self.n_epochs
+
+        self.metric_results = []
+        self.first_task_features = []
 
 
     def train_encoder_classifier(self):
-        losses, train_acc = [], []
+        current_infos, pt_infos = [], []
         self.logger.info(f'task {self.task_p} is beginning to train.')
-        bar = tqdm(total=self.total, desc=f'task {self.task_p} epoch {self.epoch}')
-        for i, (batch_inputs, batch_labels) in enumerate(self.data_loader.get_batch(self.task_p, epoch=self.epoch)):
+        bar = tqdm(total=self.data_loader.task_n_sample[self.task_p], desc=f'task {self.task_p} epoch {self.epoch}')
+        batch_size = self.batch_size #int(self.batch_size / (self.task_p + 1))
+        for i, (batch_inputs, batch_labels) in enumerate(self.data_loader.get_batch(self.task_p, epoch=self.epoch, batch_size=batch_size)):
             batch_inputs = batch_inputs.cuda()
             batch_labels = batch_labels.to(torch.int64).cuda()
-            loss, acc = self.model.train_step(batch_inputs, batch_labels, self.get_class_offset, self.task_p)
-            losses.append(loss)
-            train_acc.append(acc)
+            info, pt_info = self.model.train_step(batch_inputs, batch_labels, self.current_classes , self.task_p)
+            current_infos.append(info)
+            pt_infos.append(pt_info)
             bar.update(batch_labels.size(0))
         bar.close()
-        print(f'    loss = {np.mean(losses)}, train_acc = {np.mean(train_acc)}')
+        for k in current_infos[0].keys():
+            print(f'    {k} = {np.mean([d[k] for d in current_infos])}, pt_{k} = {np.mean([d[k] for d in pt_infos])}')
         self.metric(self.task_p)
+
 
     def train(self):
         self.metric(-1)
         for self.task_p in range(self.data_loader.n_tasks):
-            self.class_offset = self.get_class_offset(self.task_p)
-            self.trained_classes[self.class_offset[0]:self.class_offset[1]] = True
-            for self.epoch, func in enumerate(self.train_process):
-                func()
+            self.current_classes = self.data_loader.task_datasets[self.task_p].classes
+            self.trained_classes[self.current_classes] = True
+            if self.n_pretrain_epochs > 0 and self.task_p == 0:
+                for self.epoch, func in enumerate(self.pretrain_process):
+                    func()
+            else:
+                for self.epoch, func in enumerate(self.train_process):
+                    func()
             self.logger.info(f'task {self.task_p} decoder has learned over')
-
-    def deprecated_train(self):
-        last_task_p = -1
-        last_epoch = -1
-        bar = None
-        total = self.data_loader.task_n_sample[0]
-        losses, train_acc = [], []
-        newtask_flag = True
-        for i, (task_p, epoch, batch_inputs, batch_labels) in enumerate(self.data_loader):
-
-            if last_epoch != epoch or task_p != last_task_p:
-                if bar:
-                    bar.close()
-                print(f'    loss = {np.mean(losses)}, train_acc = {np.mean(train_acc)}')
-
-                if epoch != 0:
-                    self.metric(last_task_p)
-                    # if last_task_p != -1 and isinstance(self.model, Dual_parm):
-                    #     if epoch == self.n_epochs - 1 and epoch > 0:
-                    #         self.model.task_parameters.append(deepcopy(dict(self.model.state_dict())))
-                    #         self.model.over_train = True
-                    #         print('    store_parameters')
-                else:
-                    self.metric(last_task_p)
-                    self.logger.info(f'task {last_task_p} has trained over ,eval result is shown below.')
-                    self.class_offset = self.get_class_offset(task_p)
-                    self.trained_classes[self.class_offset[0]:self.class_offset[1]] = True
-                    last_task_p = task_p
-                    total = self.data_loader.task_n_sample[task_p]
-                    # if last_task_p != 0 and isinstance(self.model, Dual_parm):
-                    #     self.model.task_over_parameters.append(deepcopy(dict(self.model.state_dict())))
-                    #     self.model.load_state_dict(self.model.task_parameters[-1])
-                    #     print('    reload_parameters')
-                    #     self.model.over_train = False
-
-                bar = tqdm(total=total, desc=f'task {task_p} epoch {epoch}')
-                losses, train_acc = [], []
-                last_epoch = epoch
-            ## train step
-            if self.cuda:
-                batch_inputs = batch_inputs.cuda()
-                batch_labels = batch_labels.to(torch.int64).cuda()
-
-            # augment_inputs = self.data_loader.get_inputs_with_labels(task_p, batch_labels.cpu())
-            # loss, acc = self.model.train_step(batch_inputs, batch_labels, self.get_class_offset, task_p, augment_inputs)
-
-            loss, acc = self.model.train_step(batch_inputs, batch_labels, self.get_class_offset, task_p)
-            losses.append(loss)
-            train_acc.append(acc)
-            bar.update(batch_labels.size(0))
-
-        if bar:
-            bar.close()
-        print(f'    loss = {np.mean(losses)}, train_acc = {np.mean(train_acc)}')
-        self.metric(last_task_p)
-        self.logger.info(f'task {last_task_p} has trained over ,eval result is shown below.')
-
-
-
-    def get_class_offset(self, t):
-        if self.model.data_name == 'mnist':
-            if isinstance(t, list):
-                class_offset = [(0, 10)] * len(t)
-            else:
-                class_offset = (0, 10)
-        elif self.model.data_name == 'cifar100' or self.model.data_name == 'tinyimageNet' or self.model.data_name == 'miniiamgeNet':
-            if isinstance(t, list):
-                class_offset = []
-                for i in t:
-                    class_offset.append(self.data_loader.task_datasets[i].classes)
-            else:
-                class_offset = self.data_loader.task_datasets[t].classes
-        return class_offset
-
-
+        self.save_train_results()
 
     def metric(self, task_p=None):
         eval_size = self.eval_size
         task_accuracy = []
         offset_task_accuracy = []
+
         if task_p == -1:
-            n_classes = self.model.n_classes
+            observed_classes = np.arange(self.model.n_classes)
         else:
-            n_classes = self.trained_classes.sum()
+            observed_classes = np.nonzero(self.trained_classes)[0].tolist()
+
         for i, dataset in enumerate(self.data_loader.task_datasets):
             test_size = dataset.test_labels.size(0)
             start = 0
             predicts = torch.zeros_like(dataset.test_labels)
             offset_predicts = torch.zeros_like(dataset.test_labels)
+            features = []
             while start < test_size:
                 if start + eval_size < test_size:
                     end = start + eval_size
@@ -147,14 +90,19 @@ class base_train:
                     end = test_size
                 inputs = dataset.test_images[start: end]
                 inputs = inputs.cuda()
-                offset_predicts[start: end] = self.model.predict(inputs, self.get_class_offset(i))
-                predicts[start: end] = self.model.predict(inputs, (0, n_classes))
+                with torch.no_grad():
+                    offset_predicts[start: end] = self.model.predict(inputs, dataset.classes)
+                    predicts[start: end] = self.model.predict(inputs, observed_classes)
+                    if i == 0 and self.epoch == self.n_epochs - 1:
+                        features.append(self.model.encoder_feature(inputs).cpu())
                 start = end
             offset_accuray = np.mean(dataset.test_labels.numpy() == offset_predicts.numpy())
             offset_task_accuracy.append(offset_accuray)
             accuray = np.mean(dataset.test_labels.numpy() == predicts.numpy())
             task_accuracy.append(accuray)
             print(f'    task{i}: offset_acc={offset_accuray :.4f} acc = {accuray :.4f}')
+            if i == 0 and self.epoch == self.n_epochs - 1:
+                self.first_task_features.append((torch.cat(features, dim=0), dataset.test_labels))
         if task_p == -1:
             self.init_metric_results = task_accuracy
         elif task_p is not None:
@@ -169,10 +117,13 @@ class base_train:
                 print(f'    average forgetting = {avg_fgt}')
             self.metric_results.append(task_accuracy)
 
-    def save_train_results(self, file_name):
+
+    def save_train_results(self):
         result = EasyDict(init_accuracy=self.init_metric_results,
-                          tasks_accuracy=self.metric_results,)
-        torch.save(result, file_name)
+                          tasks_accuracy=self.metric_results,
+                          first_task_feature=self.first_task_features,)
+        torch.save(result, self.result_file)
+        self.logger.info(f'experiment result has been saved in {self.result_file}')
 
 
 
