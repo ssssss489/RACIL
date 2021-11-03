@@ -276,8 +276,8 @@ class ResNet18_Encoder(nn.Module):
         out3 = self.layer2(out2, t) # 40 16 16
         out4 = self.layer3(out3, t) # 80 8 8
         out5 = self.layer4(out4, t) # 160 4 4
-        out6 = self.linear1(out5.view(bsz, -1)) # 160   # UCIR prefer linear not pooling
-        # out6 = self.pooling(out5).view(bsz, -1)  # pooling unstable
+        # out6 = self.linear1(out5.view(bsz, -1)) # 160   # UCIR prefer linear not pooling
+        out6 = self.pooling(out5).view(bsz, -1)  # pooling unstable
         if with_hidden:
             return out6, [x, out1, out2, out3, out4, out5, out6]
         else:
@@ -376,7 +376,9 @@ class ResNet18(base_model):
                                         parameters[self.data_name].classifier[0],
                                         bn_type=args.bn_type)
         self.classifier = MLP_Classifier(parameters[self.data_name].classifier, [])
-        self.optimizer = torch.optim.SGD(self.parameters(), lr=args.lr)
+        # self.optimizer = torch.optim.SGD(self.parameters(), lr=args.lr)
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=args.lr)
+
         self.bn_type = args.bn_type
         self.show_all_parameters()
         self.cuda()

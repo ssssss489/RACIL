@@ -43,8 +43,8 @@ if __name__ == '__main__':
                         choices=['ER', 'iCaRL', 'EEIL', 'UCIR',  'LwF', 'None', 'EWC', 'AGEM',  'prototype_decoder'],
                         help='learner model')
     parser.add_argument('--lr', default=0.001, type=float, help='learning rate') #icarl 0.1 UCIR
-    parser.add_argument('--n_epochs', default=6, type=int, help='number of epochs')
-    parser.add_argument('--n_pretrain_epochs', default=10, type=int, help='number of epochs for pretrain')
+    parser.add_argument('--n_epochs', default=3, type=int, help='number of epochs')
+    parser.add_argument('--n_pretrain_epochs', default=15, type=int, help='number of epochs for pretrain')
     parser.add_argument('--batch_size', default=100, type=int, help='batch size')
 
 
@@ -52,7 +52,7 @@ if __name__ == '__main__':
     parser.add_argument('--n_memories', default=2000, type=int, help='number of memories per task')
 
     # add noisy batch Normalization and decoder based regularization
-    parser.add_argument('--bn_type', default='bn', choices=['bn', 'nbn'], help='choice bn types')
+    parser.add_argument('--bn_type', default='nbn', choices=['bn', 'nbn'], help='choice bn types')
     parser.add_argument('--regular_type', default='None', choices=['None', 'decoder',], help='flag of add decoder regularization')
     parser.add_argument('--lr_decoder', default=0.1, type=float, help='learning rate of decoder')
     parser.add_argument('--decoder_loss_weight', default=10, type=float, help='weight of decoder loss') # donot fit iCaRL

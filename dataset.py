@@ -21,7 +21,7 @@ class task_data_loader:
         self.batch_size = args.batch_size
         self.task_n_sample = []
         self.task_permutations = list(range(args.n_tasks))
-        self.n_epochs = 20# args.n_epochs
+        self.n_epochs = 100# args.n_epochs
         self.n_tasks = args.n_tasks
         sample_permutations = []
 
