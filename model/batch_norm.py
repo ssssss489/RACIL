@@ -154,7 +154,7 @@ class noiseBatchNorm2d(BatchNorm2d):
             diff = cx - mu.view(self.num_features, 1, 1, 1)
         if self.training:
             std = var.sqrt().view(self.num_features, 1, 1, 1)
-            norm = diff / (std + self.eps) + torch.randn([cx.shape[0], 1, cx.shape[2], cx.shape[3]]).cuda() * 0.1 # uCIR prefer 0.05, other 0.1
+            norm = diff / (std + self.eps) + torch.randn([cx.shape[0], 1, cx.shape[2], cx.shape[3]]).cuda() * 0.2# uCIR prefer 0.05, other 0.1
         else:
             norm = diff / (var.sqrt().view(self.num_features, 1, 1, 1) + self.eps)
         if self.affine:

@@ -40,7 +40,7 @@ class UCIR(ResNet18):
         self.regularization = None
         self.task_class_offset = []
         self.distill_loss_fn = nn.MSELoss()
-        self.optimizer = torch.optim.SGD(self.parameters(), lr=args.lr)
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=args.lr)
         self.lambda_base = args.ucir_lambda
         if args.regular_type == 'decoder':
             self.regularization = decoder_regularization(self.data_name,
@@ -52,7 +52,7 @@ class UCIR(ResNet18):
         f2 = unit_vector(org_feature).detach()
         return (1 - (f1 * f2).sum(-1)).mean()
 
-    def margin_loss(self, new_feature, labels, margin=0.2, K=5):
+    def margin_loss(self, new_feature, labels, margin=0.5, K=2):
         cos_sim = self.classifier.cos_sim(new_feature)
         labels_ = one_hot(labels, self.n_classes)
         target_cos_sim = (cos_sim * labels_).sum(-1)

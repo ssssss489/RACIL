@@ -8,7 +8,7 @@ label_font = {'size':16, }
 def compute_average_accuracy(metric_result, epoch):
     average_accuracies = []
     forgetting_metrics = []
-    final_epoch_accuracies = np.array(metric_result[epoch-1::epoch])
+    final_epoch_accuracies = np.array(metric_result[pre_train_epoch+epoch-1::epoch])
     for task_p, task_accuracy in enumerate(final_epoch_accuracies):
         average_accuracy = np.mean(task_accuracy[:task_p+1])
         average_accuracies.append(average_accuracy)
@@ -132,15 +132,19 @@ def show_task_feature_distrubtion(task_features, tasks, size=100, classes=3):
 
 
 if __name__ == '__main__':
-    result_path = 'result_2'
+    result_path = 'result_3'
     dataset = 'cifar100_10'
+    # dataset = 'cifar100_11'
+
     # dataset = 'miniimageNet64_10'
-    models = ['UCIR']
-    seeds = [0,1,2,3,4 ]
+
+    models = ['ER']
+    seeds = [3]
     epoch = 6
     n_memories = 2000
+    pre_train_epoch=0
     bn_types = ['bn', 'nbn']
-    regular_types = ['None','decoder']
+    regular_types = ['None'] #
     model = models[0]
     legend_dict = {f'{model}+None+bn':f'{model}', f'{model}+decoder+bn': f'{model}_Decoder', f'{model}+None+nbn':f'{model}_NBN',
                    f'{model}+decoder+nbn':f'{model}_Decoder_NBN'}
@@ -163,11 +167,11 @@ if __name__ == '__main__':
                     model_acc_dict[target].append(acc)
                     model_fgt_dict[target].append(fgt)
                     model_feature_dict[target].append(first_task_feature)
-    # plot_acc_lines(model_acc_dict, linestyle_dict, legend_dict)
+    plot_acc_lines(model_acc_dict, linestyle_dict, legend_dict)
     # plot_fgt_lines(model_fgt_dict, linestyle_dict, legend_dict)
     # print_metric_table(model_acc_dict)
     # show_feature_distrubtion(model_feature_dict['UCIR+None+nbn'][0], tasks=[0, 5])
-    show_feature_distrubtion(model_feature_dict['UCIR+decoder+nbn'][0], tasks=[0, 2,4,6])
+    # show_feature_distrubtion(model_feature_dict['UCIR+decoder+nbn'][0], tasks=[0, 2,4,6])
 
     # show_task_distrubtion(model_feature_dict['UCIR+decoder+bn'][1], tasks=[0, 1,2,3])
     # show_task_feature_distrubtion(model_feature_dict['UCIR+None+bn'][1], tasks=[0, 2,4,6])

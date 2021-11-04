@@ -14,7 +14,9 @@ class decoder_regularization(nn.Module):
                                         parameters[data_name].input_dims,)
         self.last_decoder = None
 
-        self.optimizer = torch.optim.SGD(self.decoder.parameters(), lr=lr)
+        # self.optimizer = torch.optim.SGD(self.decoder.parameters(), lr=lr)
+        self.optimizer = torch.optim.Adam(self.decoder.parameters(), lr=lr)
+
         self.observe_tasks = []
         self.loss_weight = loss_weight
         self.cuda()

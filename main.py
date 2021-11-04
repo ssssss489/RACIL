@@ -29,9 +29,9 @@ if __name__ == '__main__':
 
     # task setting
     parser.add_argument('--path', default='dataset/', help='input directory')
-    parser.add_argument('--result_path', default='result/', help='result directory')
-    # parser.add_argument('--dataset', default='cifar100_10_3', help='learn task')
-    parser.add_argument('--dataset', default='cifar100_11_0', help='learn task')
+    parser.add_argument('--result_path', default='result_3/', help='result directory')
+    parser.add_argument('--dataset', default='cifar100_10_4', help='learn task')
+    # parser.add_argument('--dataset', default='cifar100_11_1', help='learn task')
 
     # parser.add_argument('--dataset', default='miniimageNet64_10_3', help='learn task')
 
@@ -43,8 +43,9 @@ if __name__ == '__main__':
                         choices=['ER', 'iCaRL', 'EEIL', 'UCIR',  'LwF', 'None', 'EWC', 'AGEM',  'prototype_decoder'],
                         help='learner model')
     parser.add_argument('--lr', default=0.001, type=float, help='learning rate') #icarl 0.1 UCIR
-    parser.add_argument('--n_epochs', default=3, type=int, help='number of epochs')
-    parser.add_argument('--n_pretrain_epochs', default=15, type=int, help='number of epochs for pretrain')
+    # parser.add_argument('--pretrain_lr', default=0.001, type=float, help='learning rate for pretraining')
+    parser.add_argument('--n_epochs', default=6, type=int, help='number of epochs')
+    parser.add_argument('--n_pretrain_epochs', default=0, type=int, help='number of epochs for pretrain')
     parser.add_argument('--batch_size', default=100, type=int, help='batch size')
 
 
@@ -54,7 +55,7 @@ if __name__ == '__main__':
     # add noisy batch Normalization and decoder based regularization
     parser.add_argument('--bn_type', default='nbn', choices=['bn', 'nbn'], help='choice bn types')
     parser.add_argument('--regular_type', default='None', choices=['None', 'decoder',], help='flag of add decoder regularization')
-    parser.add_argument('--lr_decoder', default=0.1, type=float, help='learning rate of decoder')
+    parser.add_argument('--lr_decoder', default=0.001, type=float, help='learning rate of decoder')
     parser.add_argument('--decoder_loss_weight', default=10, type=float, help='weight of decoder loss') # donot fit iCaRL
 
     # LwF parameters

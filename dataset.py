@@ -374,7 +374,7 @@ if __name__ == "__main__":
                         type=float, help='minimum rotation')
     parser.add_argument('--max_rot', default=270.,
                         type=float, help='maximum rotation')
-    parser.add_argument('--seed', default=0, type=int, help='random seed')
+    parser.add_argument('--seed', default=4, type=int, help='random seed')
     args = parser.parse_args()
     torch.manual_seed(args.seed)
 
