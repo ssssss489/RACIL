@@ -311,7 +311,7 @@ def create_tinyimageNet_split(file, n_tasks):
     torch.save(task_datasets, file)
 
 
-def creat_miniimageNet_split(file, n_tasks, dim=64, task_class_nums=None):
+def create_miniimageNet_split(file, n_tasks, dim=64, task_class_nums=None):
     logger.info('init imageNet100 split dataset in {}.'.format(file))
     images, labels = load_miniimageNet(os.path.join(args.path, 'miniimageNet'), dim=dim)
 
@@ -352,6 +352,7 @@ def creat_miniimageNet_split(file, n_tasks, dim=64, task_class_nums=None):
         task_datasets.append(EasyDict(train_images=train_images, train_labels=train_labels,
                                       test_images=test_images, test_labels=test_labels,
                                       classes=classes))
+        logger.info(f'classes: {classes}')
 
     torch.save(task_datasets, file)
 
@@ -374,7 +375,7 @@ if __name__ == "__main__":
                         type=float, help='minimum rotation')
     parser.add_argument('--max_rot', default=270.,
                         type=float, help='maximum rotation')
-    parser.add_argument('--seed', default=4, type=int, help='random seed')
+    parser.add_argument('--seed', default=0, type=int, help='random seed')
     args = parser.parse_args()
     torch.manual_seed(args.seed)
 
@@ -390,9 +391,13 @@ if __name__ == "__main__":
 
     # create_tinyimageNet_split(os.path.join(args.path, 'tinyimageNet_{n_tasks}.pt'.format(n_tasks=args.n_tasks)), args.n_tasks)
 
-    # creat_miniimageNet_split(os.path.join(args.path, 'miniimageNet{dim}_{n_tasks}_{seed}.pt'.format(dim=64, n_tasks=args.n_tasks, seed=args.seed)),
+    # create_miniimageNet_split(os.path.join(args.path, 'miniimageNet{dim}_{n_tasks}_{seed}.pt'.format(dim=64, n_tasks=args.n_tasks, seed=args.seed)),
     #                          args.n_tasks, dim=64)
 
+    # task_class_nums = [10] + [1] * 10
+    # create_cifar100_split(os.path.join(args.path, 'cifar100_{n_tasks}_{seed}.pt'.format(n_tasks=args.n_tasks, seed=args.seed)),
+    #                       args.n_tasks, task_class_nums)
+
     task_class_nums = [10] + [1] * 10
-    create_cifar100_split(os.path.join(args.path, 'cifar100_{n_tasks}_{seed}.pt'.format(n_tasks=args.n_tasks, seed=args.seed)),
-                          args.n_tasks, task_class_nums)
+    create_miniimageNet_split(os.path.join(args.path, 'miniimageNet{dim}_{n_tasks}_{seed}.pt'.format(dim=64, n_tasks=args.n_tasks, seed=args.seed)),
+                          args.n_tasks, dim=64,  task_class_nums=task_class_nums)

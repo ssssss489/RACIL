@@ -189,14 +189,14 @@ class ResizeConv2d(nn.Module):
         super(ResizeConv2d, self).__init__()
         self.scale_factor = scale_factor
         self.mode = mode
-        # self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=1)
-        if scale_factor == 1:
-            self.conv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride=scale_factor, padding=1)
-        else:
-            self.conv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride=scale_factor, padding=1, output_padding=1)
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=1)
+        # if scale_factor == 1:
+        #     self.conv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride=scale_factor, padding=1)
+        # else:
+        #     self.conv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride=scale_factor, padding=1, output_padding=1)
 
     def forward(self, x):
-        # x = interpolate(x, scale_factor=self.scale_factor, mode=self.mode)
+        x = interpolate(x, scale_factor=self.scale_factor, mode=self.mode)
         x = self.conv(x)
         return x
 
@@ -276,12 +276,13 @@ class ResNet18_Encoder(nn.Module):
         out3 = self.layer2(out2, t) # 40 16 16
         out4 = self.layer3(out3, t) # 80 8 8
         out5 = self.layer4(out4, t) # 160 4 4
-        out6 = self.linear1(out5.view(bsz, -1)) # 160   # UCIR prefer linear not pooling
-        # out6 = self.pooling(out5).view(bsz, -1)  # pooling unstable
+        # out6 = self.linear1(out5.view(bsz, -1)) # 160   # UCIR prefer linear not pooling
+        out6 = self.pooling(out5).view(bsz, -1)  # decoder prefer pooling pretrain ER nbn
         if with_hidden:
             return out6, [x, out1, out2, out3, out4, out5, out6]
         else:
             return out6
+
 
     def forward_from_layer3(self, out3, t=None, with_hidden=False):
         bsz = out3.size(0)
@@ -308,8 +309,8 @@ class ResNet18_Decoder(nn.Module):
         self.layer2 = self._make_layer(BasicBlockDec, nf * 1, num_Blocks[1], stride=2)
         self.layer1 = self._make_layer(BasicBlockDec, nf * 1, num_Blocks[0], stride=1)
         self.conv1 = ResizeConv2d(nf, self.outputs_dims[0], kernel_size=3, scale_factor=int(self.outputs_dims[-1]/self.outputs_dims[-1]))
-        pass
-        # self.conv1 = nn.Conv2d(64, self.outputs_dims[0], kernel_size=3, stride=int(self.outputs_dims[-1]/32))
+
+
 
     def _make_layer(self, BasicBlockDec, planes, num_Blocks, stride):
         strides = [stride] + [1]*(num_Blocks-1)
@@ -318,6 +319,7 @@ class ResNet18_Decoder(nn.Module):
             layers += [BasicBlockDec(self.in_planes, stride)]
         self.in_planes = planes
         return nn.Sequential(*layers)
+
 
 
     def forward(self, z):
@@ -377,7 +379,6 @@ class ResNet18(base_model):
                                         bn_type=args.bn_type)
         self.classifier = MLP_Classifier(parameters[self.data_name].classifier, [])
         self.optimizer = torch.optim.Adam(self.parameters(), lr=args.lr)
-        # self.pretrain_optimizer = torch.optim.Adam(self.parameters(), lr=args.pretrain_lr)
 
         self.bn_type = args.bn_type
         self.show_all_parameters()

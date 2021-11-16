@@ -11,11 +11,13 @@ class ER(ResNet18):
         self.next_buffer = Buffer(self.n_tasks, args.n_memories, self.n_classes)
         self.eps_mem_batch = args.eps_mem_batch
         self.regularization = None
+        self.last_encoder = None
         self.task_class_offset = []
         if args.regular_type == 'decoder':
             self.regularization = decoder_regularization(self.data_name,
                                                          lr=args.lr_decoder,
-                                                         loss_weight=args.decoder_loss_weight)
+                                                         loss_weight=args.decoder_loss_weight,
+                                                         last_loss_weight=args.last_decoder_loss_weight)
 
 
     def train_step(self, inputs, labels, class_offset, task_p):
@@ -25,6 +27,7 @@ class ER(ResNet18):
         if task_p not in self.observed_tasks:
             self.observed_tasks.append(task_p)
             self.buffer = deepcopy(self.next_buffer)
+            self.last_encoder = deepcopy(self.encoder)
             self.task_class_offset.append(class_offset)
 
 
@@ -44,7 +47,8 @@ class ER(ResNet18):
 
         regularize_loss, pt_regularize_loss = torch.FloatTensor([0,0])
         if self.regularization:
-            regularize_loss, pt_regularize_loss = self.regularization(en_features, tasks, task_p)
+            last_en_features = self.last_encoder(inputs, tasks, with_hidden=True)[1]
+            regularize_loss, pt_regularize_loss = self.regularization(en_features, last_en_features, tasks, task_p)
             loss += regularize_loss + pt_regularize_loss
 
         obversed_class_offset = np.concatenate(self.task_class_offset, axis=0)

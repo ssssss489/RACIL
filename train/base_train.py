@@ -5,6 +5,8 @@ from tqdm import tqdm
 import numpy as np
 from easydict import EasyDict
 import os
+from collections import defaultdict
+from utils import *
 
 class base_train:
     def __init__(self, data_loader, model, args, logger):
@@ -22,6 +24,7 @@ class base_train:
 
         self.n_epochs = args.n_epochs
         self.n_pretrain_epochs = args.n_pretrain_epochs
+        self.show_unsaved_task = args.show_unsaved_task
 
         self.task_p =None
         self.epoch = None
@@ -33,6 +36,7 @@ class base_train:
 
         self.metric_results = []
         self.first_task_features = []
+        self.show_save_unsave_features = defaultdict(list)
 
 
     def train_encoder_classifier(self):
@@ -51,6 +55,32 @@ class base_train:
         for k in current_infos[0].keys():
             print(f'    {k} = {np.mean([d[k] for d in current_infos])}, pt_{k} = {np.mean([d[k] for d in pt_infos])}')
         self.metric(self.task_p)
+        self.save_feature()
+
+
+    def save_feature(self):
+        if self.task_p > self.show_unsaved_task:
+            self.logger.info(f' save first task feature .')
+            self.model.eval()
+            saved_flag = []
+            features = []
+            labels = []
+            for i, (batch_inputs, batch_labels) in enumerate(self.data_loader.get_batch(self.show_unsaved_task, epoch=self.epoch, batch_size=self.batch_size)):
+                for inputs in batch_inputs:
+                    saved_flag.append(int((to_numpy(inputs) == to_numpy(self.model.buffer.memory_inputs)).all(axis=(1,2,3)).any()))
+                tasks = torch.zeros_like(batch_labels).fill_(self.task_p).cuda()
+                batch_inputs = batch_inputs.cuda()
+                logits, en_features = self.model.forward(batch_inputs, tasks, with_hidden=True)
+                features.append(en_features[-1].cpu())
+                labels.append(batch_labels)
+            torch.cuda.empty_cache()
+            features = to_numpy(torch.cat(features, dim=0))
+            labels = to_numpy(torch.cat(labels))
+            self.show_save_unsave_features[str(self.task_p)].append((features, labels, saved_flag))
+
+
+
+
 
 
     def train(self):
@@ -70,6 +100,7 @@ class base_train:
     def metric(self, task_p=None):
         eval_size = self.eval_size
         task_accuracy = []
+        task_size = []
         offset_task_accuracy = []
 
         if task_p == -1:
@@ -79,6 +110,7 @@ class base_train:
 
         for i, dataset in enumerate(self.data_loader.task_datasets):
             test_size = dataset.test_labels.size(0)
+            task_size.append(test_size)
             start = 0
             predicts = torch.zeros_like(dataset.test_labels)
             offset_predicts = torch.zeros_like(dataset.test_labels)
@@ -106,8 +138,9 @@ class base_train:
         if task_p == -1:
             self.init_metric_results = task_accuracy
         elif task_p is not None:
-            pre_task_accuracy = task_accuracy[:task_p+1]
-            avg_acc = np.mean(pre_task_accuracy)
+            pre_task_accuracy = np.array(task_accuracy[:task_p+1])
+            pre_task_size = np.array(task_size[:task_p+1])
+            avg_acc = (pre_task_accuracy * pre_task_size).sum() / (pre_task_size.sum() + 1e-7) #np.mean(pre_task_accuracy)
             print(f'    average accuracy = {avg_acc}')
 
             pre_metric_results = np.array(self.metric_results)
@@ -121,7 +154,8 @@ class base_train:
     def save_train_results(self):
         result = EasyDict(init_accuracy=self.init_metric_results,
                           tasks_accuracy=self.metric_results,
-                          first_task_feature=self.first_task_features,)
+                          first_task_feature=self.first_task_features,
+                          show_save_unsave_features=self.show_save_unsave_features,)
         torch.save(result, self.result_file)
         self.logger.info(f'experiment result has been saved in {self.result_file}')
 

@@ -16,16 +16,21 @@ class EEIL(ResNet18):
         self.eps_mem_batch = args.eps_mem_batch
         self.distill_weight = args.eeil_distll_weight
         self.regularization = None
+        self.last_encoder = None
         if args.regular_type == 'decoder':
             self.regularization = decoder_regularization(self.data_name,
                                                          lr=args.lr_decoder,
-                                                         loss_weight=args.decoder_loss_weight)
+                                                         loss_weight=args.decoder_loss_weight,
+                                                         last_loss_weight=args.last_decoder_loss_weight)
 
     def distill_loss(self, logits, labels, class_offset, T=2.0):
-        log_scores_norm = (logits ** 1/T).softmax(dim=1).log()
+        # logits = logits[:, class_offset]
+        # labels = labels[:, class_offset]
+        log_scores_norm = ((logits ** 1/T).softmax(dim=1) + 1e-10).log()
         targets_norm =(labels ** 1/ T).softmax(dim=1).detach()
         # Calculate distillation loss (see e.g., Li and Hoiem, 2017)
         kd_loss = -1 * (targets_norm * log_scores_norm)[:, class_offset].sum(dim=1).mean()
+        # kd_loss = -1 * (targets_norm * log_scores_norm).sum(dim=1).mean()
         return kd_loss
 
 
@@ -37,11 +42,13 @@ class EEIL(ResNet18):
             self.observed_tasks.append(task_p)
             self.buffer = deepcopy(self.next_buffer)
             self.task_class_offset.append(class_offset)
+            self.last_encoder = deepcopy(self.encoder)
             if task_p > 0:
-                self.pre_classifiers.append(deepcopy(self.classifier))
+                pre_classifier = deepcopy(self.classifier)
+                self.pre_classifiers.append(pre_classifier)
 
         if task_p > 0:
-            mem_inputs, mem_labels, mem_tasks = random_retrieve(self.buffer, n_retrieve=inputs.shape[0] * task_p)
+            mem_inputs, mem_labels, mem_tasks = random_retrieve(self.buffer, n_retrieve=inputs.shape[0])
         else:
             mem_inputs, mem_labels, mem_tasks = torch.FloatTensor().cuda(), torch.LongTensor().cuda(), torch.LongTensor().cuda()
 
@@ -55,16 +62,18 @@ class EEIL(ResNet18):
 
         regularize_loss, pt_regularize_loss , = torch.FloatTensor([0,0])
 
-        distill_loss = 0
-        for pre_task in range(task_p):
-            pre_task_logits = self.pre_classifiers[pre_task](en_features[-1])
-            # distill_loss += self.distill_loss(logits, pre_task_logits, np.concatenate(self.task_class_offset[:pre_task + 1]))
-            distill_loss += self.distill_loss(logits, pre_task_logits, self.task_class_offset[pre_task]) * self.distill_weight
-
-        loss += distill_loss
-
         obversed_class_offset = np.concatenate(self.task_class_offset, axis=0)
         logits = mask(logits, obversed_class_offset)
+
+        distill_loss = 0
+        for pre_task in range(task_p):
+            # with torch.no_grad():
+            pre_task_logits = self.pre_classifiers[pre_task](en_features[-1].detach())
+            # distill_loss += self.distill_loss(logits, pre_task_logits, np.concatenate(self.task_class_offset[:pre_task + 1]))
+            distill_loss += self.distill_loss(logits, pre_task_logits, self.task_class_offset[pre_task]) * self.distill_weight
+        loss += distill_loss
+
+
 
         pt_sample_idx = tasks != task_p
         cur_sample_idx = tasks == task_p
@@ -78,11 +87,14 @@ class EEIL(ResNet18):
 
 
         if self.regularization:
-            regularize_loss, pt_regularize_loss = self.regularization(en_features, tasks, task_p)
+            with torch.no_grad():
+                last_en_features = self.last_encoder(inputs, tasks, with_hidden=True)[1]
+            regularize_loss, pt_regularize_loss = self.regularization(en_features, last_en_features, tasks, task_p)
             loss += regularize_loss + pt_regularize_loss
 
         acc = torch.eq(torch.argmax(cur_logits, dim=1), cur_labels).float().mean()
         pt_acc = torch.eq(torch.argmax(pt_logits, dim=1), pt_labels).float().mean()
+
 
         loss.backward()
         self.optimizer.step()
