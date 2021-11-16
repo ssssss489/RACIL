@@ -29,14 +29,13 @@ if __name__ == '__main__':
 
     # task setting
     parser.add_argument('--path', default='dataset/', help='input directory')
-    parser.add_argument('--result_path', default='result_1/', help='result directory')
-    parser.add_argument('--dataset', default='cifar100_10_2', help='learn task')
+    parser.add_argument('--result_path', default='result_3/', help='result directory')
+    parser.add_argument('--dataset', default='cifar100_10_4', help='learn task')
     # parser.add_argument('--dataset', default='cifar100_11_1', help='learn task')
 
-    # parser.add_argument('--dataset', default='miniimageNet64_10_0', help='learn task')
-    # parser.add_argument('--dataset', default='miniimageNet64_11_0', help='learn task')
+    # parser.add_argument('--dataset', default='miniimageNet64_10_3', help='learn task')
 
-    parser.add_argument('--n_tasks', default=4, type=int, help='number of tasks')
+    parser.add_argument('--n_tasks', default=10, type=int, help='number of tasks')
     parser.add_argument('--samples_per_task', type=int, default=-1, help='training samples per task (all if negative)')
 
     # base model setting
@@ -44,25 +43,23 @@ if __name__ == '__main__':
                         choices=['ER', 'iCaRL', 'EEIL', 'UCIR',  'LwF', 'None', 'EWC', 'AGEM',  'prototype_decoder'],
                         help='learner model')
     parser.add_argument('--lr', default=0.001, type=float, help='learning rate') #icarl 0.1 UCIR
+    # parser.add_argument('--pretrain_lr', default=0.001, type=float, help='learning rate for pretraining')
     parser.add_argument('--n_epochs', default=6, type=int, help='number of epochs')
     parser.add_argument('--n_pretrain_epochs', default=0, type=int, help='number of epochs for pretrain')
     parser.add_argument('--batch_size', default=100, type=int, help='batch size')
 
-    parser.add_argument('--show_unsaved_task', default=0, type=int, help='show the change of feature representation')
 
     # base memory setting
     parser.add_argument('--n_memories', default=2000, type=int, help='number of memories per task')
 
     # add noisy batch Normalization and decoder based regularization
-    parser.add_argument('--bn_type', default='bn', choices=['bn', 'nbn'], help='choice bn types')
-    parser.add_argument('--regular_type', default='decoder', choices=['None', 'decoder',], help='flag of add decoder regularization')
+    parser.add_argument('--bn_type', default='nbn', choices=['bn', 'nbn'], help='choice bn types')
+    parser.add_argument('--regular_type', default='None', choices=['None', 'decoder',], help='flag of add decoder regularization')
     parser.add_argument('--lr_decoder', default=0.001, type=float, help='learning rate of decoder')
-    parser.add_argument('--decoder_loss_weight', default=5, type=float, help='weight of decoder loss') # 10task 5 last * 2
-    parser.add_argument('--last_decoder_loss_weight', default=10, type=float, help='weight of last decoder loss') # 10task 5 last * 2
+    parser.add_argument('--decoder_loss_weight', default=10, type=float, help='weight of decoder loss') # donot fit iCaRL
 
     # LwF parameters
     parser.add_argument('--distill_loss_weight', default=1.0, help='weight of knowledge distill loss')
-
 
 
     # EWC parameters
@@ -73,8 +70,10 @@ if __name__ == '__main__':
     #EEIL parametrs
     parser.add_argument('--eeil_distll_weight', default=1, help= 'parameter lambda in ucir')
 
+
+
     #UCIR parameters
-    parser.add_argument('--ucir_lambda', default=5, help= 'parameter lambda in ucir')
+    parser.add_argument('--ucir_lambda', default=1, help= 'parameter lambda in ucir')
 
 
 

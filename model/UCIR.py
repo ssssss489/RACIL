@@ -11,7 +11,7 @@ class UCIL_classifier(nn.Module):
         super(UCIL_classifier, self).__init__()
         self.hidden_sizes = hidden_sizes
         self.weights = nn.Parameter(torch.randn(self.hidden_sizes))
-        self.eta = nn.Parameter(torch.ones(self.hidden_sizes[-1]) * 2, requires_grad=True)
+        self.eta = nn.Parameter(torch.ones(self.hidden_sizes[-1]) * 5 , requires_grad=True)
 
     def forward(self, x):
         weightsT = unit_vector(self.weights.T)
@@ -45,8 +45,7 @@ class UCIR(ResNet18):
         if args.regular_type == 'decoder':
             self.regularization = decoder_regularization(self.data_name,
                                                          lr=args.lr_decoder,
-                                                         loss_weight=args.decoder_loss_weight,
-                                                         last_loss_weight=args.last_decoder_loss_weight)
+                                                         loss_weight=args.decoder_loss_weight)
 
     def distill_loss(self, new_feature, org_feature):
         f1 = unit_vector(new_feature)
@@ -71,8 +70,9 @@ class UCIR(ResNet18):
             self.observed_tasks.append(task_p)
             self.buffer = deepcopy(self.next_buffer)
             self.task_class_offset.append(class_offset)
-            self.last_encoder = deepcopy(self.encoder)
-            self.last_classifier = deepcopy(self.classifier)
+            if task_p > 0:
+                self.last_classifier = deepcopy(self.classifier)
+                self.last_encoder = deepcopy(self.encoder)
 
 
         if task_p > 0:
@@ -101,8 +101,8 @@ class UCIR(ResNet18):
 
         regularize_loss, pt_regularize_loss = torch.FloatTensor([0,0])
         if self.regularization:
-            last_en_features = self.last_encoder(inputs, tasks, with_hidden=True)[1]
-            regularize_loss, pt_regularize_loss = self.regularization(en_features, last_en_features, tasks, task_p)
+            # en_features[-1] = unit_vector(en_features[-1])
+            regularize_loss, pt_regularize_loss = self.regularization(en_features, tasks, task_p)
             loss += regularize_loss + pt_regularize_loss
 
         obversed_class_offset = np.concatenate(self.task_class_offset, axis=0)

@@ -3,14 +3,14 @@ from utils import *
 import os
 from collections import defaultdict
 
-label_font = {'size':15, }
+label_font = {'size':16, }
 
 def compute_average_accuracy(metric_result, epoch):
     average_accuracies = []
     forgetting_metrics = []
     final_epoch_accuracies = np.array(metric_result[pre_train_epoch+epoch-1::epoch])
     for task_p, task_accuracy in enumerate(final_epoch_accuracies):
-        average_accuracy = (task_accuracy[:task_p+1] * task_size[:task_p+1]).sum() / (task_size[:task_p+1].sum() + 1e-7)#np.mean(task_accuracy[:task_p+1])
+        average_accuracy = np.mean(task_accuracy[:task_p+1])
         average_accuracies.append(average_accuracy)
         if task_p > 0:
             forgetting_list = []
@@ -21,16 +21,15 @@ def compute_average_accuracy(metric_result, epoch):
 
 def plot_acc_lines(data_dict, linestyle_dict, legend_dict):
     plt.ylabel('average accuracy', label_font)
-    plt.xlabel('number of classes', label_font)
+    plt.xlabel('numbers of classes', label_font)
     for model, data in data_dict.items():
         data = np.array(data)
-
+        xs = np.arange(1, data.shape[1] + 1) * 10
         ys = data.mean(axis=0)
         plt.xticks(xs)
-        plt.plot(xs, ys, color=linestyle_dict[model], label=legend_dict[model], marker='o', markersize=4, markerfacecolor='white')
-        plt.ylim(0, 0.7)
+        plt.plot(xs, ys, linestyle_dict[model], label=legend_dict[model], marker='o', markersize=3)
         fs = data.std(axis=0)
-        plt.fill_between(xs, ys-fs, ys+fs, color=linestyle_dict[model], alpha=0.1)
+        plt.fill_between(xs, ys-fs, ys+fs, color=linestyle_dict[model][0], alpha=0.1)
     plt.legend()
     plt.grid(axis='y', linestyle='--')
     plt.show()
@@ -47,11 +46,10 @@ def plot_fgt_lines(data_dict, linestyle_dict, legend_dict):
 
         plt.plot(xs, ys, linestyle_dict[model], label=legend_dict[model], marker='o', markersize=3)
         fs = data.std(axis=0)
-        plt.fill_between(xs, ys-fs, ys+fs, color=linestyle_dict[model], alpha=0.1)
+        plt.fill_between(xs, ys-fs, ys+fs, color=linestyle_dict[model][0], alpha=0.1)
     plt.legend()
     plt.grid(axis='y', linestyle='--')
     plt.show()
-
 
 def print_metric_table(data_dict):
     for model, data in data_dict.items():
@@ -74,7 +72,7 @@ def show_feature_distrubtion(task_features, tasks, size=100, classes=3):
         tsne = TSNE(n_components=2, init='pca', random_state=0)
         features = tsne.fit_transform(features)
 
-        plt.subplot(1, 2, i+1)
+        plt.subplot(2, 2, i+1)
         plt.scatter(features[:, 0], features[:, 1], c=colors, s=15, alpha=0.8)
         plt.xlim(-30, 30)
         plt.ylim(-30, 30)
@@ -122,46 +120,11 @@ def show_task_feature_distrubtion(task_features, tasks, size=100, classes=3):
     for i, t_colors in enumerate(colors):
         t_features = features_[i* len(t_colors): (i+1) * len(t_colors)]
         plt.subplot(2, 2, i+1)
-        plt.xlim(-40,40)
-        plt.ylim(-40,40)
+        plt.xlim(-70, 70)
+        plt.ylim(-60,60)
         plt.scatter(t_features[:, 0], t_features[:, 1], c=t_colors, s=15, alpha=0.8)
 
     plt.show()
-
-def show_save_unsave_feature(data, tasks, epoch=-1, classes=1):
-    labels_list = list(set(data[str(tasks[0])][0][1]))
-    plt.figure(figsize=(6,2))
-    for i,  task in enumerate(tasks):
-        features, labels, save_flag = data[str(task)][epoch]
-        show_features = []
-        show_save_flag = []
-        for l in labels_list[1:classes+1]:
-            cls_idx = labels == l
-            show_features.append(features[cls_idx])
-            show_save_flag.append(np.array(save_flag)[cls_idx])
-        show_features = np.concatenate(show_features, axis=0)
-        show_save_flag = np.concatenate(show_save_flag, axis=0)
-
-        tsne = TSNE(n_components=2, init='pca', random_state=0)
-        features = tsne.fit_transform(show_features)
-        plt.subplot(1, 2, i + 1)
-        stored_idx = show_save_flag == 1
-        unstored_idx = show_save_flag == 0
-        scatter_stored = plt.scatter(features[stored_idx, 0], features[stored_idx, 1], c='r', s=5, alpha=1, label='stored')
-        scatter_stored = plt.scatter(features[unstored_idx, 0], features[unstored_idx, 1], c='g', s=5, alpha=1, label='unstored')
-        plt.legend()
-        # plt.xlim(-30, 30)
-        # plt.ylim(-30, 30)
-        titles = ['1st', '2nd', '3rd', '4th']
-        plt.title('after the {} task'.format(titles[task]))
-    plt.show()
-
-
-
-
-
-
-
 
 
 
@@ -169,36 +132,26 @@ def show_save_unsave_feature(data, tasks, epoch=-1, classes=1):
 
 
 if __name__ == '__main__':
-    result_path = 'result_4'
-    # dataset = 'cifar100_10'
-    dataset = 'cifar100_11'
+    result_path = 'result_3'
+    dataset = 'cifar100_10'
+    # dataset = 'cifar100_11'
 
     # dataset = 'miniimageNet64_10'
-    # dataset = 'miniimageNet64_11'
 
     models = ['ER']
-
-    seeds = [0,1,2,3,4]
+    seeds = [3]
     epoch = 6
-    n_memories=2000
+    n_memories = 2000
     pre_train_epoch=0
-    bn_types = ['bn','nbn'] # , 'nbn'
-    regular_types = ['None', 'decoder'] #
+    bn_types = ['bn', 'nbn']
+    regular_types = ['None'] #
     model = models[0]
-    task_size = np.array([1] * 10)
-    xs = np.arange(1, 10 + 1) * 10
-
-    pre_train_epoch=20 - epoch
-    task_size = np.array([10] + [1] * 10)
-    xs = 50 + np.arange(0, 11) * 5
-
-    legend_dict = {f'{model}+None+bn':f'{model}', f'{model}+decoder+bn': f'{model}+DBR', f'{model}+None+nbn':f'{model}+NBN',
-                   f'{model}+decoder+nbn':f'{model}+DBR+NBN'}
-    linestyle_dict = {f'{model}+None+bn':'b', f'{model}+decoder+bn': 'g', f'{model}+None+nbn':'r', f'{model}+decoder+nbn':'c'}
+    legend_dict = {f'{model}+None+bn':f'{model}', f'{model}+decoder+bn': f'{model}_Decoder', f'{model}+None+nbn':f'{model}_NBN',
+                   f'{model}+decoder+nbn':f'{model}_Decoder_NBN'}
+    linestyle_dict = {f'{model}+None+bn':'b', f'{model}+decoder+bn': 'r', f'{model}+None+nbn':'g', f'{model}+decoder+nbn':'y'}
     model_acc_dict = defaultdict(list)
     model_fgt_dict = defaultdict(list)
     model_feature_dict = defaultdict(list)
-    save_unsave_features_dict = defaultdict(list)
     for model in models:
         for seed in seeds:
             for regular_type in regular_types:
@@ -206,7 +159,6 @@ if __name__ == '__main__':
                     file_name = os.path.join(result_path, f'{model}_{dataset}_{seed}_{epoch}_{n_memories}_{bn_type}_{regular_type}.pt')
                     if not os.path.exists(file_name):
                         continue
-                    print(file_name)
                     result = torch.load(file_name)
                     task_accuracy = result.tasks_accuracy
                     first_task_feature = result.first_task_feature
@@ -215,11 +167,12 @@ if __name__ == '__main__':
                     model_acc_dict[target].append(acc)
                     model_fgt_dict[target].append(fgt)
                     model_feature_dict[target].append(first_task_feature)
-                    # save_unsave_features_dict[target].append(result.show_save_unsave_features)
     plot_acc_lines(model_acc_dict, linestyle_dict, legend_dict)
     # plot_fgt_lines(model_fgt_dict, linestyle_dict, legend_dict)
-    print_metric_table(model_acc_dict)
-    print_metric_table(model_fgt_dict)
+    # print_metric_table(model_acc_dict)
+    # show_feature_distrubtion(model_feature_dict['UCIR+None+nbn'][0], tasks=[0, 5])
+    # show_feature_distrubtion(model_feature_dict['UCIR+decoder+nbn'][0], tasks=[0, 2,4,6])
 
+    # show_task_distrubtion(model_feature_dict['UCIR+decoder+bn'][1], tasks=[0, 1,2,3])
+    # show_task_feature_distrubtion(model_feature_dict['UCIR+None+bn'][1], tasks=[0, 2,4,6])
 
-    # show_save_unsave_feature(save_unsave_features_dict['ER+None+bn'][0], [1,2])
